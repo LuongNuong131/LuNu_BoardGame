@@ -1,0 +1,253 @@
+-- LuNu BoardGame core Supabase schema
+-- Run this migration before the seating and catalog migrations.
+
+create extension if not exists pgcrypto;
+
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  username text not null unique,
+  display_name text not null,
+  avatar_url text,
+  role text not null default 'USER' check (role in ('USER', 'MODERATOR', 'ADMIN', 'SUPER_ADMIN')),
+  status text not null default 'ACTIVE' check (status in ('ACTIVE', 'SUSPENDED', 'BANNED', 'DISABLED')),
+  level integer not null default 1 check (level >= 1),
+  xp integer not null default 0 check (xp >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.profiles add column if not exists avatar_url text;
+alter table public.profiles add column if not exists role text not null default 'USER';
+alter table public.profiles add column if not exists status text not null default 'ACTIVE';
+alter table public.profiles add column if not exists level integer not null default 1;
+alter table public.profiles add column if not exists xp integer not null default 0;
+alter table public.profiles add column if not exists created_at timestamptz not null default now();
+alter table public.profiles add column if not exists updated_at timestamptz not null default now();
+
+create table if not exists public.wallets (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references public.profiles(id) on delete cascade,
+  balance bigint not null default 10000 check (balance >= 0),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.wallet_transactions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  amount bigint not null,
+  type text not null,
+  reason text not null,
+  admin_id uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists wallet_transactions_user_created_idx on public.wallet_transactions(user_id, created_at desc);
+
+create table if not exists public.games (
+  id text primary key,
+  name text not null,
+  min_players integer not null check (min_players >= 1),
+  max_players integer not null check (max_players >= min_players),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.game_rooms (
+  id uuid primary key default gen_random_uuid(),
+  game_id text not null references public.games(id),
+  name text not null,
+  owner_id uuid not null references public.profiles(id) on delete cascade,
+  max_players integer not null check (max_players >= 1),
+  entry_fee bigint not null default 0 check (entry_fee >= 0),
+  status text not null default 'WAITING' check (status in ('WAITING', 'RUNNING', 'FINISHED', 'CANCELLED')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists game_rooms_status_created_idx on public.game_rooms(status, created_at desc);
+create index if not exists game_rooms_owner_idx on public.game_rooms(owner_id);
+
+create table if not exists public.game_room_players (
+  id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references public.game_rooms(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  is_ready boolean not null default false,
+  created_at timestamptz not null default now(),
+  unique(room_id, user_id)
+);
+
+create index if not exists game_room_players_room_idx on public.game_room_players(room_id);
+
+create table if not exists public.game_sessions (
+  id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references public.game_rooms(id) on delete cascade,
+  game_id text not null references public.games(id),
+  status text not null default 'PLAYING' check (status in ('PLAYING', 'FINISHED', 'ABANDONED')),
+  current_state jsonb not null default '{}'::jsonb,
+  winner_id uuid references public.profiles(id) on delete set null,
+  started_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists game_sessions_room_status_idx on public.game_sessions(room_id, status);
+
+create table if not exists public.chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  channel_id text not null,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  message text not null check (char_length(message) between 1 and 500),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists chat_messages_channel_created_idx on public.chat_messages(channel_id, created_at desc);
+
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  metadata_username text;
+  metadata_display_name text;
+begin
+  metadata_username := coalesce(new.raw_user_meta_data ->> 'username', split_part(new.email, '@', 1));
+  metadata_display_name := coalesce(new.raw_user_meta_data ->> 'display_name', metadata_username);
+
+  insert into public.profiles (id, username, display_name, role)
+  values (new.id, metadata_username, metadata_display_name, coalesce(new.raw_user_meta_data ->> 'role', 'USER'))
+  on conflict (id) do update set
+    display_name = excluded.display_name,
+    updated_at = now();
+
+  insert into public.wallets (user_id, balance)
+  values (new.id, 10000)
+  on conflict (user_id) do nothing;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute procedure public.handle_new_user();
+
+create or replace function public.process_wallet_transaction(
+  p_user_id uuid,
+  p_amount bigint,
+  p_type text,
+  p_reason text,
+  p_admin_id uuid default null
+)
+returns jsonb
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  current_balance bigint;
+  next_balance bigint;
+  transaction_id uuid;
+begin
+  if p_amount = 0 then raise exception 'INVALID_AMOUNT'; end if;
+
+  insert into public.wallets (user_id, balance)
+  values (p_user_id, 10000)
+  on conflict (user_id) do nothing;
+
+  select balance into current_balance from public.wallets where user_id = p_user_id for update;
+  next_balance := current_balance + p_amount;
+  if next_balance < 0 then raise exception 'INSUFFICIENT_BALANCE'; end if;
+
+  update public.wallets set balance = next_balance, updated_at = now() where user_id = p_user_id;
+  insert into public.wallet_transactions (user_id, amount, type, reason, admin_id)
+  values (p_user_id, p_amount, p_type, p_reason, p_admin_id)
+  returning id into transaction_id;
+
+  return jsonb_build_object('transaction_id', transaction_id, 'user_id', p_user_id, 'amount', p_amount, 'balance', next_balance);
+end;
+$$;
+
+alter table public.profiles enable row level security;
+alter table public.wallets enable row level security;
+alter table public.wallet_transactions enable row level security;
+alter table public.games enable row level security;
+alter table public.game_rooms enable row level security;
+alter table public.game_room_players enable row level security;
+alter table public.game_sessions enable row level security;
+alter table public.chat_messages enable row level security;
+
+-- The backend uses the service role for protected writes. These policies allow a logged-in client
+-- to read its own profile/wallet and public game metadata without opening admin data.
+drop policy if exists profiles_self_select on public.profiles;
+create policy profiles_self_select on public.profiles for select to authenticated using (id = auth.uid());
+drop policy if exists games_public_select on public.games;
+create policy games_public_select on public.games for select to authenticated using (is_active = true);
+drop policy if exists wallets_self_select on public.wallets;
+create policy wallets_self_select on public.wallets for select to authenticated using (user_id = auth.uid());
+drop policy if exists wallet_transactions_self_select on public.wallet_transactions;
+create policy wallet_transactions_self_select on public.wallet_transactions for select to authenticated using (user_id = auth.uid());
+
+-- Enable Realtime for the collaboration surfaces when they are not already registered.
+do $$
+begin
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'game_rooms') then
+    alter publication supabase_realtime add table public.game_rooms;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'game_room_players') then
+    alter publication supabase_realtime add table public.game_room_players;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'game_sessions') then
+    alter publication supabase_realtime add table public.game_sessions;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'chat_messages') then
+    alter publication supabase_realtime add table public.chat_messages;
+  end if;
+end $$;
+-- LuNu room seating model
+-- Apply this migration before enabling the full-seat spectator flow.
+
+alter table public.game_room_players
+  add column if not exists role text not null default 'PLAYER',
+  add column if not exists seat_index integer,
+  add column if not exists joined_at timestamptz not null default now();
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'game_room_players_role_check'
+  ) then
+    alter table public.game_room_players
+      add constraint game_room_players_role_check check (role in ('PLAYER', 'SPECTATOR'));
+  end if;
+end $$;
+
+create unique index if not exists game_room_players_unique_active_seat
+  on public.game_room_players (room_id, seat_index)
+  where role = 'PLAYER' and seat_index is not null;
+
+create index if not exists game_room_players_room_joined_at_idx
+  on public.game_room_players (room_id, joined_at);
+-- LuNu game catalog metadata.
+-- The engines can be added independently behind the existing GameEngine contract.
+
+insert into public.games (id, name, min_players, max_players) values
+  ('UNO', 'UNO', 2, 8),
+  ('WEREWOLF', 'Ma Sói', 6, 18),
+  ('TIEN_LEN', 'Tiến lên', 2, 4),
+  ('BLACKJACK', 'Blackjack', 1, 5),
+  ('PHOM', 'Phỏm', 2, 4),
+  ('XI_DACH', 'Xì dách', 2, 4),
+  ('POKER', 'Poker', 2, 9),
+  ('MAU_BINH', 'Mậu binh', 2, 4),
+  ('BAO_CAO', 'Bài cào', 2, 6),
+  ('LIENG', 'Liêng', 2, 6),
+  ('CHESS', 'Cờ vua', 2, 2),
+  ('CO_TUONG', 'Cờ tướng', 2, 2),
+  ('CO_CA_NGUA', 'Cờ cá ngựa', 2, 4),
+  ('CO_TY_PHU', 'Cờ tỷ phú', 2, 6),
+  ('EXPLODING_KITTENS', 'Mèo nổ', 2, 5)
+on conflict (id) do update set
+  name = excluded.name,
+  min_players = excluded.min_players,
+  max_players = excluded.max_players;

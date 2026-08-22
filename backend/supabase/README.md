@@ -2,13 +2,9 @@
 
 LuNu uses Supabase Auth plus the public tables `profiles`, `wallets`, `wallet_transactions`, `games`, `game_rooms`, `game_room_players`, `game_sessions`, and `chat_messages`.
 
-Run the migrations in filename order from the Supabase SQL Editor or with the Supabase CLI:
+Bạn có thể chạy nhanh bằng cách mở file `backend/supabase/LuNuBoardGame_FULL_SCHEMA.sql`, copy toàn bộ nội dung rồi paste vào Supabase Dashboard → SQL Editor → Run. Nếu dùng Supabase CLI, chạy `supabase db push` sau khi đặt các migration vào thư mục migrations.
 
-```bash
-supabase db push
-```
-
-The expected order is `202608220000_core_schema.sql`, `202608220001_room_seating.sql`, then `202608220002_game_catalog.sql`. The core migration creates missing tables, profile and wallet triggers, the atomic `process_wallet_transaction` RPC, basic RLS policies, and Realtime publication membership. The seating migration adds `PLAYER`/`SPECTATOR`, deterministic `seat_index`, join ordering, and a unique active-seat index. The catalog migration seeds UNO plus all supported LuNu games.
+Nếu muốn chạy tách từng bước, thứ tự là `202608220000_core_schema.sql`, `202608220001_room_seating.sql`, rồi `202608220002_game_catalog.sql`. File `LuNuBoardGame_FULL_SCHEMA.sql` đã nối sẵn cả ba phần và được viết theo hướng idempotent để có thể chạy lại an toàn. The core migration creates missing tables, profile and wallet triggers, the atomic `process_wallet_transaction` RPC, basic RLS policies, and Realtime publication membership. The seating migration adds `PLAYER`/`SPECTATOR`, deterministic `seat_index`, join ordering, and a unique active-seat index. The catalog migration seeds UNO plus all supported LuNu games.
 
 The TypeScript backend must receive `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` through its local environment. The browser must receive only `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Never commit either secret. Admin API routes are protected by the authenticated profile `role` field and accept `SUPER_ADMIN` or `ADMIN` only.
 
