@@ -5,13 +5,13 @@ export const errorHandler = (error: FastifyError | AppError | Error, request: Fa
   request.log.error(error);
 
   // Trick: Dùng duck-typing kiểm tra thuộc tính thay vì instanceof để chống lỗi class kế thừa
-  if ('statusCode' in error && 'errorCode' in error) {
+  if ('statusCode' in error && 'code' in error) {
     const appErr = error as AppError;
     return reply.status(appErr.statusCode).send({
       success: false,
       data: null,
       error: {
-        code: appErr.errorCode,
+        code: appErr.code,
         message: appErr.message
       }
     });

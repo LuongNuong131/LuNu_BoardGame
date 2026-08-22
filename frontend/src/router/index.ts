@@ -8,32 +8,21 @@ const routes: Array<RouteRecordRaw> = [
   { path: '/wallet-history', name: 'WalletHistory', component: () => import('@/features/wallet/WalletHistoryView.vue'), meta: { requiresAuth: true } },
   { path: '/rooms', name: 'RoomsLobby', component: () => import('@/features/rooms/RoomsView.vue'), meta: { requiresAuth: true } },
   { path: '/room/:id', name: 'RoomDetail', component: () => import('@/features/rooms/RoomDetailView.vue'), meta: { requiresAuth: true } },
-  { path: '/game/:sessionId', name: 'GameUNO', component: () => import('@/features/games/uno/UnoBoardView.vue'), meta: { requiresAuth: true } }
+  { path: '/game/:sessionId', name: 'GameArena', component: () => import('@/features/games/GameSessionView.vue'), meta: { requiresAuth: true } }
 ];
 
 const router = createRouter({ history: createWebHistory(), routes });
 
-router.beforeEach(async (to, from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore();
-  
-  // Khởi tạo session nếu trang vừa được F5 tải lại
-  if (!authStore.isAuthenticated) {
-    await authStore.initialize();
-  }
+  if (!authStore.isAuthenticated) await authStore.initialize();
 
   const isAuth = authStore.isAuthenticated;
   const role = authStore.profile?.role;
-
-  // Logic bảo vệ route
-  if (to.meta.requiresAuth && !isAuth) {
-    next({ name: 'Login' });
-  } else if (to.meta.requiresGuest && isAuth) {
-    next({ name: 'Home' });
-  } else if (to.meta.requiresAdmin && role !== 'SUPER_ADMIN' && role !== 'ADMIN') {
-    next({ name: 'Home' });
-  } else {
-    next();
-  }
+  if (to.meta.requiresAuth && !isAuth) next({ name: 'Login' });
+  else if (to.meta.requiresGuest && isAuth) next({ name: 'Home' });
+  else if (to.meta.requiresAdmin && role !== 'SUPER_ADMIN' && role !== 'ADMIN') next({ name: 'Home' });
+  else next();
 });
 
 export default router;

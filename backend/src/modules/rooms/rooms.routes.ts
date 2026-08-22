@@ -8,5 +8,6 @@ export async function roomsRoutes(server: FastifyInstance) {
   server.get('/', roomsController.getRooms);
   server.post('/', roomsController.createRoom);
   server.post('/:id/join', roomsController.joinRoom);
+  server.post('/:id/leave', roomsController.leaveRoom);
   server.get('/:id', roomsController.getRoomDetail);
 }

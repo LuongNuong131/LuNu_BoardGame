@@ -5,7 +5,9 @@ export const useRoomStore = defineStore('room', {
   state: () => ({
     rooms: [] as any[],
     currentRoom: null as any,
-    loading: false
+    loading: false,
+    lastJoinMode: null as 'PLAYER' | 'SPECTATOR' | null,
+    lastSeatIndex: null as number | null
   }),
   actions: {
     async fetchRooms() {
@@ -23,7 +25,16 @@ export const useRoomStore = defineStore('room', {
       throw new Error('Lỗi tạo phòng');
     },
     async joinRoom(roomId: string) {
-      await apiClient.post(`/rooms/${roomId}/join`);
+      const res: any = await apiClient.post(`/rooms/${roomId}/join`);
+      this.lastJoinMode = res.data?.mode || 'PLAYER';
+      this.lastSeatIndex = res.data?.seatIndex ?? null;
+      return res.data;
+    },
+    async leaveRoom(roomId: string) {
+      const res: any = await apiClient.post(`/rooms/${roomId}/leave`);
+      this.lastJoinMode = null;
+      this.lastSeatIndex = null;
+      return res.data;
     },
     async fetchRoomDetail(roomId: string) {
       const res: any = await apiClient.get(`/rooms/${roomId}`);
