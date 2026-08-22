@@ -6,6 +6,7 @@ const routes: Array<RouteRecordRaw> = [
   { path: '/', name: 'Home', component: () => import('@/features/home/HomeView.vue'), meta: { requiresAuth: true } },
   { path: '/admin', name: 'AdminDashboard', component: () => import('@/features/admin/AdminUsersView.vue'), meta: { requiresAuth: true, requiresAdmin: true } },
   { path: '/wallet-history', name: 'WalletHistory', component: () => import('@/features/wallet/WalletHistoryView.vue'), meta: { requiresAuth: true } },
+  { path: '/profile', name: 'Profile', component: () => import('@/features/profile/ProfileView.vue'), meta: { requiresAuth: true } },
   { path: '/rooms', name: 'RoomsLobby', component: () => import('@/features/rooms/RoomsView.vue'), meta: { requiresAuth: true } },
   { path: '/room/:id', name: 'RoomDetail', component: () => import('@/features/rooms/RoomDetailView.vue'), meta: { requiresAuth: true } },
   { path: '/game/:sessionId', name: 'GameArena', component: () => import('@/features/games/GameSessionView.vue'), meta: { requiresAuth: true } }

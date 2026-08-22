@@ -10,7 +10,7 @@ export class RoomsService {
   async getLobbyRooms() {
     const modern = await supabaseAdmin
       .from('game_rooms')
-      .select('id, name, game_id, max_players, status, entry_fee, created_at, owner:profiles!game_rooms_owner_id_fkey(display_name), participants:game_room_players(role)')
+      .select('id, name, game_id, owner_id, max_players, status, entry_fee, created_at, owner:profiles!game_rooms_owner_id_fkey(display_name), participants:game_room_players(role)')
       .eq('status', 'WAITING')
       .order('created_at', { ascending: false });
 
@@ -30,7 +30,7 @@ export class RoomsService {
 
     const legacy = await supabaseAdmin
       .from('game_rooms')
-      .select('id, name, game_id, max_players, status, entry_fee, created_at, owner:profiles!game_rooms_owner_id_fkey(display_name), players:game_room_players(count)')
+      .select('id, name, game_id, owner_id, max_players, status, entry_fee, created_at, owner:profiles!game_rooms_owner_id_fkey(display_name), players:game_room_players(count)')
       .eq('status', 'WAITING')
       .order('created_at', { ascending: false });
     if (legacy.error) throw new AppError(500, 'DB_ERROR', `Lỗi tải sảnh: ${legacy.error.message}`);
@@ -68,7 +68,7 @@ export class RoomsService {
     const atomicJoin = await supabaseAdmin.rpc('join_room', { p_room_id: roomId, p_user_id: userId });
     if (!atomicJoin.error) return atomicJoin.data;
     const atomicMessage = String(atomicJoin.error?.message || '').toLowerCase();
-    if (!atomicMessage.includes('function') && !atomicMessage.includes('join_room') && !isSeatingSchemaError(atomicJoin.error)) {
+    if (!atomicMessage.includes('function') && !atomicMessage.includes('join_room') && !atomicMessage.includes('existing_record') && !isSeatingSchemaError(atomicJoin.error)) {
       if (atomicMessage.includes('room_not_found')) throw new AppError(404, 'ROOM_NOT_FOUND', 'Phòng không tồn tại.');
       throw new AppError(500, 'JOIN_FAILED', `Lỗi DB join phòng: ${atomicJoin.error.message}`);
     }
@@ -113,6 +113,17 @@ export class RoomsService {
     const { error } = await supabaseAdmin.from('game_room_players').insert({ room_id: roomId, user_id: userId });
     if (error) throw new AppError(500, 'JOIN_FAILED', `Lỗi DB join phòng: ${error.message}`);
     return { mode: 'PLAYER', seatIndex: null };
+  }
+
+  async deleteRoom(roomId: string, requesterId: string, requesterRole?: string) {
+    const { data: room, error: lookupError } = await supabaseAdmin.from('game_rooms').select('id, owner_id, status').eq('id', roomId).single();
+    if (lookupError || !room) throw new AppError(404, 'ROOM_NOT_FOUND', 'Phòng không tồn tại.');
+    const isAdmin = requesterRole === 'ADMIN' || requesterRole === 'SUPER_ADMIN';
+    if (room.owner_id !== requesterId && !isAdmin) throw new AppError(403, 'FORBIDDEN', 'Chỉ chủ phòng hoặc admin mới được xóa phòng.');
+    if (room.status === 'RUNNING' && !isAdmin) throw new AppError(409, 'ROOM_RUNNING', 'Không thể xóa phòng đang diễn ra. Hãy kết thúc ván trước.');
+    const { error } = await supabaseAdmin.from('game_rooms').delete().eq('id', roomId);
+    if (error) throw new AppError(500, 'DELETE_FAILED', `Không thể xóa phòng: ${error.message}`);
+    return { id: roomId };
   }
 
   async leaveRoom(roomId: string, userId: string) {

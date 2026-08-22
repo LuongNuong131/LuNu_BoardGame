@@ -19,6 +19,7 @@ create table if not exists public.profiles (
 alter table public.profiles add column if not exists username text;
 alter table public.profiles add column if not exists display_name text;
 alter table public.profiles add column if not exists avatar_url text;
+alter table public.profiles add column if not exists avatar_path text;
 alter table public.profiles add column if not exists role text not null default 'USER';
 alter table public.profiles add column if not exists status text not null default 'ACTIVE';
 alter table public.profiles add column if not exists level integer not null default 1;
@@ -215,6 +216,8 @@ alter table public.chat_messages enable row level security;
 -- to read its own profile/wallet and public game metadata without opening admin data.
 drop policy if exists profiles_self_select on public.profiles;
 create policy profiles_self_select on public.profiles for select to authenticated using (id = auth.uid());
+drop policy if exists profiles_self_update on public.profiles;
+create policy profiles_self_update on public.profiles for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
 drop policy if exists games_public_select on public.games;
 create policy games_public_select on public.games for select to authenticated using (is_active = true);
 drop policy if exists wallets_self_select on public.wallets;
@@ -232,6 +235,19 @@ alter table public.game_rooms replica identity full;
 alter table public.game_room_players replica identity full;
 alter table public.game_sessions replica identity full;
 alter table public.chat_messages replica identity full;
+
+insert into storage.buckets (id, name, public)
+values ('avatars', 'avatars', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists avatars_public_read on storage.objects;
+create policy avatars_public_read on storage.objects for select using (bucket_id = 'avatars');
+drop policy if exists avatars_user_insert on storage.objects;
+create policy avatars_user_insert on storage.objects for insert to authenticated with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists avatars_user_update on storage.objects;
+create policy avatars_user_update on storage.objects for update to authenticated using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text) with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists avatars_user_delete on storage.objects;
+create policy avatars_user_delete on storage.objects for delete to authenticated using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 
 -- Enable Realtime for the collaboration surfaces when they are not already registered.
 do $$
@@ -282,7 +298,6 @@ security definer set search_path = public
 as $$
 declare
   room_record public.game_rooms%rowtype;
-  existing_record public.game_room_players%rowtype;
   selected_seat integer;
   assigned_role text;
   existing_role text;
@@ -291,9 +306,10 @@ begin
   select * into room_record from public.game_rooms where id = p_room_id for update;
   if room_record.id is null then raise exception 'ROOM_NOT_FOUND'; end if;
 
-  select * into existing_record from public.game_room_players where room_id = p_room_id and user_id = p_user_id;
-  if existing_record.id is not null then
-    return jsonb_build_object('mode', existing_record.role, 'seatIndex', existing_record.seat_index);
+  if exists (select 1 from public.game_room_players where room_id = p_room_id and user_id = p_user_id) then
+    select role, seat_index into existing_role, existing_seat
+    from public.game_room_players where room_id = p_room_id and user_id = p_user_id;
+    return jsonb_build_object('mode', existing_role, 'seatIndex', existing_seat);
   end if;
 
   if room_record.status <> 'WAITING' then

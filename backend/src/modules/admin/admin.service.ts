@@ -94,6 +94,16 @@ export class AdminService {
     return (data || []).map((transaction: any) => ({ ...transaction, type: transaction.type || 'LEGACY', reason: transaction.reason || 'Giao dịch cũ', user: profileMap.get(transaction.user_id) || null, admin: null }));
   }
 
+  async deleteUser(userId: string, requesterId: string) {
+    if (userId === requesterId) throw new AppError(400, 'SELF_DELETE_NOT_ALLOWED', 'Không thể tự xóa tài khoản admin đang đăng nhập.');
+    const { data: target, error: targetError } = await supabaseAdmin.from('profiles').select('id, role').eq('id', userId).single();
+    if (targetError || !target) throw new AppError(404, 'USER_NOT_FOUND', 'Không tìm thấy người dùng.');
+    if (target.role === 'SUPER_ADMIN') throw new AppError(403, 'PROTECTED_USER', 'Không thể xóa tài khoản SUPER_ADMIN.');
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
+    if (error) throw new AppError(500, 'DELETE_FAILED', `Không thể xóa tài khoản: ${error.message}`);
+    return { id: userId };
+  }
+
   async updateUserStatus(userId: string, status: string) {
     const allowed = ['ACTIVE', 'SUSPENDED', 'BANNED', 'DISABLED'];
     if (!allowed.includes(status)) throw new AppError(400, 'VALIDATION_ERROR', 'Trạng thái tài khoản không hợp lệ.');

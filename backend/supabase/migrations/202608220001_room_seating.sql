@@ -31,7 +31,6 @@ security definer set search_path = public
 as $$
 declare
   room_record public.game_rooms%rowtype;
-  existing_record public.game_room_players%rowtype;
   selected_seat integer;
   assigned_role text;
   existing_role text;
@@ -40,9 +39,10 @@ begin
   select * into room_record from public.game_rooms where id = p_room_id for update;
   if room_record.id is null then raise exception 'ROOM_NOT_FOUND'; end if;
 
-  select * into existing_record from public.game_room_players where room_id = p_room_id and user_id = p_user_id;
-  if existing_record.id is not null then
-    return jsonb_build_object('mode', existing_record.role, 'seatIndex', existing_record.seat_index);
+  if exists (select 1 from public.game_room_players where room_id = p_room_id and user_id = p_user_id) then
+    select role, seat_index into existing_role, existing_seat
+    from public.game_room_players where room_id = p_room_id and user_id = p_user_id;
+    return jsonb_build_object('mode', existing_role, 'seatIndex', existing_seat);
   end if;
 
   if room_record.status <> 'WAITING' then

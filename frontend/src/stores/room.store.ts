@@ -77,6 +77,13 @@ export const useRoomStore = defineStore('room', {
       return res.data;
     },
 
+    async deleteRoom(roomId: string) {
+      const res: any = await apiClient.delete(`/rooms/${roomId}`);
+      if (!res.success) throw new Error('Không thể xóa phòng.');
+      this.rooms = this.rooms.filter((room: any) => room.id !== roomId);
+      return res.data;
+    },
+
     async leaveRoom(roomId: string) {
       const res: any = await apiClient.post(`/rooms/${roomId}/leave`);
       this.lastJoinMode = null;

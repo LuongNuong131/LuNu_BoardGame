@@ -29,6 +29,12 @@ export const getTransactions = async (request: FastifyRequest, reply: FastifyRep
   return reply.send({ success: true, data, error: null });
 };
 
+export const deleteUser = async (request: FastifyRequest, reply: FastifyReply) => {
+  const { id } = request.params as any;
+  const data = await adminService.deleteUser(id, request.user!.id);
+  return reply.send({ success: true, data, error: null });
+};
+
 export const updateUserStatus = async (request: FastifyRequest, reply: FastifyReply) => {
   const { id } = request.params as any;
   const { status } = request.body as any;

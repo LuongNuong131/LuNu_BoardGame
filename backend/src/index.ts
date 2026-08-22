@@ -1,5 +1,6 @@
 import fastify from 'fastify';
 import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
 import helmet from '@fastify/helmet';
 import dotenv from 'dotenv';
 import { errorHandler } from './middleware/errorHandler';
@@ -19,6 +20,7 @@ initializeGames();
 const server = fastify({ logger: { transport: { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss Z', ignore: 'pid,hostname' } } } });
 
 server.register(helmet);
+server.register(multipart, { limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
 server.register(cors, { origin: '*', credentials: true });
 server.setErrorHandler(errorHandler);
 

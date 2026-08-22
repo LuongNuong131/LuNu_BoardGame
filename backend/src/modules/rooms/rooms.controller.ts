@@ -30,6 +30,12 @@ export const joinRoom = async (request: FastifyRequest, reply: FastifyReply) => 
   });
 };
 
+export const deleteRoom = async (request: FastifyRequest, reply: FastifyReply) => {
+  const { id } = request.params as any;
+  const result = await roomsService.deleteRoom(id, request.user!.id, request.user!.role);
+  return reply.send({ success: true, data: result, error: null });
+};
+
 export const leaveRoom = async (request: FastifyRequest, reply: FastifyReply) => {
   const userId = request.user!.id;
   const { id } = request.params as any;

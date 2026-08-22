@@ -63,11 +63,11 @@ const logout = async () => {
       <main class="main-content">
         <header class="topbar">
           <div class="d-lg-none"><router-link to="/" class="brand-mark"><span class="brand-glyph"><i class="bi bi-diamond-half"></i></span><span><strong>LuNu</strong></span></router-link></div>
-          <div class="topbar-context d-none d-md-flex"><span class="context-dot"></span><span>LuNu Club</span><span class="context-divider">/</span><span>{{ route.name === 'RoomsLobby' ? 'Sảnh game' : route.name === 'RoomDetail' ? 'Phòng chơi' : 'Tổng quan' }}</span></div>
+          <div class="topbar-context d-none d-md-flex"><span class="context-dot"></span><span>LuNu Club</span><span class="context-divider">/</span><span>{{ route.name === 'RoomsLobby' ? 'Sảnh game' : route.name === 'RoomDetail' ? 'Phòng chơi' : route.name === 'Profile' ? 'Hồ sơ cá nhân' : route.name === 'AdminDashboard' ? 'Quản trị hệ thống' : 'Tổng quan' }}</span></div>
           <div class="topbar-actions ms-auto">
             <button class="icon-button" title="Thông báo"><i class="bi bi-bell"></i><span></span></button>
             <div class="top-wallet"><i class="bi bi-coin"></i><strong>{{ walletStore.balance.toLocaleString('vi-VN') }}</strong><small>xu</small></div>
-            <div class="profile-chip"><img :src="avatar" :alt="displayName"><div class="d-none d-sm-block"><strong>{{ displayName }}</strong><small>@{{ username }}</small></div><i class="bi bi-chevron-down text-muted small"></i></div>
+            <router-link to="/profile" class="profile-chip"><img :src="avatar" :alt="displayName"><div class="d-none d-sm-block"><strong>{{ displayName }}</strong><small>@{{ username }}</small></div><i class="bi bi-chevron-down text-muted small"></i></router-link>
           </div>
         </header>
         <router-view v-slot="{ Component }">

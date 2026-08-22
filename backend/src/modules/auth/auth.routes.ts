@@ -9,4 +9,6 @@ export async function authRoutes(server: FastifyInstance) {
   
   // Protected routes (Bắt buộc phải có token)
   server.get('/me', { preHandler: [requireAuth] }, authController.getMe);
+  server.patch('/profile', { preHandler: [requireAuth] }, authController.updateProfile);
+  server.post('/profile/avatar', { preHandler: [requireAuth] }, authController.uploadAvatar);
 }

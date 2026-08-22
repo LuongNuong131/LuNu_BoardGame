@@ -9,6 +9,7 @@ export async function adminRoutes(server: FastifyInstance) {
   server.get('/overview', adminController.getOverview);
   server.get('/users', adminController.getUsers);
   server.post('/users', adminController.createUser);
+  server.delete('/users/:id', adminController.deleteUser);
   server.patch('/users/:id/status', adminController.updateUserStatus);
   server.get('/rooms', adminController.getRooms);
   server.patch('/rooms/:id/status', adminController.updateRoomStatus);
