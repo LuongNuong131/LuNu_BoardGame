@@ -4,9 +4,13 @@ import { AppError } from '../../../shared/errors/AppError';
 import { gameRegistry } from '../core/GameRegistry';
 
 const getActiveRoomPlayers = async (roomId: string) => {
-  const { data, error } = await supabaseAdmin.from('game_room_players').select('user_id, role, seat_index').eq('room_id', roomId);
-  if (error) throw new AppError(500, 'DB_ERROR', `Không thể đọc ghế trong phòng: ${error.message}`);
-  return (data || []).filter((participant: any) => participant.role !== 'SPECTATOR');
+  const modern = await supabaseAdmin.from('game_room_players').select('user_id, role, seat_index').eq('room_id', roomId);
+  if (!modern.error) return (modern.data || []).filter((participant: any) => participant.role !== 'SPECTATOR');
+  const message = String(modern.error.message || '').toLowerCase();
+  if (!message.includes('role') && !message.includes('seat_index')) throw new AppError(500, 'DB_ERROR', `Không thể đọc ghế trong phòng: ${modern.error.message}`);
+  const legacy = await supabaseAdmin.from('game_room_players').select('user_id').eq('room_id', roomId);
+  if (legacy.error) throw new AppError(500, 'DB_ERROR', `Không thể đọc người chơi trong phòng: ${legacy.error.message}`);
+  return (legacy.data || []).map((participant: any) => ({ ...participant, role: 'PLAYER', seat_index: null }));
 };
 
 const requireActivePlayer = async (roomId: string, userId: string) => {
@@ -15,6 +19,11 @@ const requireActivePlayer = async (roomId: string, userId: string) => {
     throw new AppError(403, 'SPECTATOR_READ_ONLY', 'Khán giả chỉ có thể xem trận đấu, không thể thực hiện nước đi.');
   }
   return players;
+};
+
+const resolveEngine = (gameId: string) => {
+  try { return gameRegistry.getEngine(gameId); }
+  catch { throw new AppError(409, 'ENGINE_NOT_READY', `Engine cho game ${gameId} chưa sẵn sàng. Phòng vẫn có thể dùng để chờ và xem bàn.`); }
 };
 
 export const startGame = async (request: FastifyRequest, reply: FastifyReply) => {
@@ -28,7 +37,7 @@ export const startGame = async (request: FastifyRequest, reply: FastifyReply) =>
   const players = await requireActivePlayer(roomId, userId);
   if (players.length < 2) throw new AppError(400, 'NOT_ENOUGH_PLAYERS', 'Cần ít nhất 2 người để bắt đầu.');
 
-  const engine = gameRegistry.getEngine(room.game_id);
+  const engine = resolveEngine(room.game_id);
   const initialState = engine.initialize(players.map((player: any) => player.user_id), {});
   const { data: session, error: sessionError } = await supabaseAdmin.from('game_sessions')
     .insert({ room_id: roomId, game_id: room.game_id, current_state: initialState, status: 'PLAYING' })
@@ -46,7 +55,7 @@ export const getSessionState = async (request: FastifyRequest, reply: FastifyRep
   const { data: session, error } = await supabaseAdmin.from('game_sessions').select('*').eq('id', sessionId).single();
   if (error || !session) throw new AppError(404, 'NOT_FOUND', 'Không tìm thấy ván đấu');
 
-  const engine = gameRegistry.getEngine(session.game_id);
+  const engine = resolveEngine(session.game_id);
   const publicState = engine.getPublicState(session.current_state, userId);
   return reply.send({ success: true, data: {
     session: { id: session.id, room_id: session.room_id, game_id: session.game_id, status: session.status, started_at: session.started_at, updated_at: session.updated_at },
@@ -62,7 +71,7 @@ export const playAction = async (request: FastifyRequest, reply: FastifyReply) =
   if (error || !session || session.status !== 'PLAYING') throw new AppError(400, 'INVALID', 'Game không khả dụng');
   await requireActivePlayer(session.room_id, userId);
 
-  const engine = gameRegistry.getEngine(session.game_id);
+  const engine = resolveEngine(session.game_id);
   if (!engine.validateAction(session.current_state, action, userId)) throw new AppError(400, 'INVALID_ACTION', 'Nước đi không hợp lệ (Không đúng lượt hoặc sai luật).');
   const { newState, events } = engine.applyAction(session.current_state, action, userId);
   let status = 'PLAYING';

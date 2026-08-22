@@ -65,6 +65,14 @@ export class RoomsService {
   }
 
   async joinRoom(roomId: string, userId: string) {
+    const atomicJoin = await supabaseAdmin.rpc('join_room', { p_room_id: roomId, p_user_id: userId });
+    if (!atomicJoin.error) return atomicJoin.data;
+    const atomicMessage = String(atomicJoin.error?.message || '').toLowerCase();
+    if (!atomicMessage.includes('function') && !atomicMessage.includes('join_room') && !isSeatingSchemaError(atomicJoin.error)) {
+      if (atomicMessage.includes('room_not_found')) throw new AppError(404, 'ROOM_NOT_FOUND', 'Phòng không tồn tại.');
+      throw new AppError(500, 'JOIN_FAILED', `Lỗi DB join phòng: ${atomicJoin.error.message}`);
+    }
+
     const modern = await supabaseAdmin
       .from('game_rooms')
       .select('id, status, max_players, players:game_room_players(user_id, role, seat_index)')

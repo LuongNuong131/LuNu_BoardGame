@@ -20,7 +20,7 @@ export class AdminService {
 
     const { data: recentTransactions, error: transactionError } = await supabaseAdmin
       .from('wallet_transactions')
-      .select('id, user_id, amount, type, reason, created_at')
+      .select('id, user_id, amount, created_at')
       .order('created_at', { ascending: false })
       .limit(6);
     if (transactionError) throw new AppError(500, 'DB_ERROR', `Không thể đọc giao dịch gần đây: ${transactionError.message}`);
@@ -40,7 +40,7 @@ export class AdminService {
 
     return {
       metrics: { users, rooms, liveSessions: sessions, transactions },
-      recentTransactions: (recentTransactions || []).map((transaction: any) => ({ ...transaction, user: recentProfileMap.get(transaction.user_id) || null })),
+      recentTransactions: (recentTransactions || []).map((transaction: any) => ({ ...transaction, type: transaction.type || 'LEGACY', reason: transaction.reason || 'Giao dịch cũ', user: recentProfileMap.get(transaction.user_id) || null })),
       activeRooms: (activeRooms || []).map((room: any) => ({
         ...room,
         player_count: (room.participants || []).filter((item: any) => item.role !== 'SPECTATOR').length,
@@ -82,7 +82,7 @@ export class AdminService {
   async getTransactions(limit = 100) {
     const { data, error } = await supabaseAdmin
       .from('wallet_transactions')
-      .select('id, user_id, amount, type, reason, admin_id, created_at')
+      .select('id, user_id, amount, created_at')
       .order('created_at', { ascending: false })
       .limit(limit);
     if (error) throw new AppError(500, 'DB_ERROR', `Không thể lấy lịch sử giao dịch: ${error.message}`);
@@ -91,7 +91,7 @@ export class AdminService {
       ? await supabaseAdmin.from('profiles').select('id, username, display_name').in('id', profileIds)
       : { data: [] };
     const profileMap = new Map((profiles || []).map((profile: any) => [profile.id, profile]));
-    return (data || []).map((transaction: any) => ({ ...transaction, user: profileMap.get(transaction.user_id) || null, admin: profileMap.get(transaction.admin_id) || null }));
+    return (data || []).map((transaction: any) => ({ ...transaction, type: transaction.type || 'LEGACY', reason: transaction.reason || 'Giao dịch cũ', user: profileMap.get(transaction.user_id) || null, admin: null }));
   }
 
   async updateUserStatus(userId: string, status: string) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useChatStore } from '@/stores/chat.store';
 import { useAuthStore } from '@/stores/auth.store';
 import { formatDate } from '@/utils/formatters';
@@ -14,6 +14,8 @@ const authStore = useAuthStore();
 
 const newMessage = ref('');
 const chatScrollRef = ref<HTMLElement | null>(null);
+const channelStatus = computed(() => chatStore.statuses[props.channelId] || 'CONNECTING');
+const channelLabel = computed(() => channelStatus.value === 'SUBSCRIBED' ? 'Đang trực tuyến' : channelStatus.value === 'RECONNECTING' ? 'Đang kết nối lại' : 'Đang kết nối');
 
 const scrollToBottom = () => {
   nextTick(() => {
@@ -24,8 +26,8 @@ const scrollToBottom = () => {
 };
 
 onMounted(async () => {
-  await chatStore.fetchHistory(props.channelId);
   chatStore.subscribeToChannel(props.channelId);
+  try { await chatStore.fetchHistory(props.channelId); } catch { /* keep the live channel available even when history is temporarily unavailable */ }
   scrollToBottom();
 });
 
@@ -54,8 +56,8 @@ const getRoleBadge = (role: string) => {
 
 <template>
   <div class="chat-container d-flex flex-column h-100">
-    <div class="chat-header p-2 border-bottom border-secondary bg-dark text-light fw-bold text-center">
-      <i class="bi bi-chat-dots-fill me-2 text-info"></i>{{ title }}
+    <div class="chat-header p-2 border-bottom border-secondary bg-dark text-light fw-bold text-center d-flex align-items-center justify-content-center gap-2">
+      <i class="bi bi-chat-dots-fill text-info"></i>{{ title }}<small class="chat-live-status" :class="channelStatus.toLowerCase()"><span></span>{{ channelLabel }}</small>
     </div>
     
     <div class="chat-messages p-3 flex-grow-1 overflow-auto" ref="chatScrollRef">
@@ -104,7 +106,7 @@ const getRoleBadge = (role: string) => {
   border: 1px solid var(--glass-border);
 }
 
-.chat-messages {
+.chat-live-status{display:inline-flex;align-items:center;gap:4px;color:var(--gv-text-muted);font-size:.58rem;font-weight:500}.chat-live-status span{width:5px;height:5px;border-radius:50%;background:var(--gv-accent-warning)}.chat-live-status.subscribed{color:var(--gv-accent-success)}.chat-live-status.subscribed span{background:var(--gv-accent-success)}.chat-live-status.channel_error,.chat-live-status.timed_out{color:#ef9a9e}.chat-messages {
   max-height: 400px;
 }
 

@@ -11,14 +11,13 @@ const sessionId = computed(() => route.params.sessionId as string);
 const routeGameId = computed(() => sessionId.value.replace(/^demo-/, '').toUpperCase());
 const activeGameId = computed(() => gameStore.session?.game_id || (GAME_BY_ID[routeGameId.value] ? routeGameId.value : 'WEREWOLF'));
 const activeGame = computed(() => GAME_BY_ID[activeGameId.value] || GAME_BY_ID.WEREWOLF);
-const isDemo = computed(() => sessionId.value.startsWith('demo-') || !gameStore.session);
+const isDemo = computed(() => sessionId.value.startsWith('demo-'));
 const selectedCard = ref<number | null>(null);
 const actionMessage = ref('Đến lượt của bạn · chọn một hành động');
 const showRules = ref(false);
 const demoHand = ref([
   { rank: 'A', suit: '♠', tone: 'black' }, { rank: 'K', suit: '♥', tone: 'red' }, { rank: '10', suit: '♣', tone: 'black' }, { rank: '8', suit: '♦', tone: 'red' }, { rank: '7', suit: '♠', tone: 'black' }, { rank: '3', suit: '♥', tone: 'red' }
 ]);
-let poller: ReturnType<typeof setInterval> | undefined;
 
 const currentState = computed(() => gameStore.gameState as any);
 const myHand = computed(() => isDemo.value ? demoHand.value : currentState.value?.myHand || []);
@@ -28,12 +27,14 @@ const topCard = computed(() => currentState.value?.discardPile?.at(-1) || { rank
 
 onMounted(async () => {
   if (!isDemo.value) {
-    try { await gameStore.fetchGameState(sessionId.value); } catch { actionMessage.value = 'Kết nối bàn tạm thời gián đoạn · đang ở chế độ xem'; }
-    poller = setInterval(() => gameStore.fetchGameState(sessionId.value).catch(() => undefined), 2500);
+    try {
+      await gameStore.fetchGameState(sessionId.value);
+      gameStore.subscribeToSession(sessionId.value);
+    } catch { actionMessage.value = 'Kết nối bàn tạm thời gián đoạn · đang ở chế độ xem'; }
   }
 });
 
-onUnmounted(() => { if (poller) clearInterval(poller); });
+onUnmounted(() => { if (!isDemo.value) gameStore.unsubscribeFromSession(); });
 
 const chooseCard = (index: number | string) => { const cardIndex = Number(index); selectedCard.value = selectedCard.value === cardIndex ? null : cardIndex; actionMessage.value = selectedCard.value === null ? 'Đến lượt của bạn · chọn một hành động' : `Đã chọn lá ${cardIndex + 1} · xác nhận để đánh`; };
 const drawCard = async () => {

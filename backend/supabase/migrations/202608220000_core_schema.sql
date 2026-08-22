@@ -16,6 +16,8 @@ create table if not exists public.profiles (
   updated_at timestamptz not null default now()
 );
 
+alter table public.profiles add column if not exists username text;
+alter table public.profiles add column if not exists display_name text;
 alter table public.profiles add column if not exists avatar_url text;
 alter table public.profiles add column if not exists role text not null default 'USER';
 alter table public.profiles add column if not exists status text not null default 'ACTIVE';
@@ -23,6 +25,9 @@ alter table public.profiles add column if not exists level integer not null defa
 alter table public.profiles add column if not exists xp integer not null default 0;
 alter table public.profiles add column if not exists created_at timestamptz not null default now();
 alter table public.profiles add column if not exists updated_at timestamptz not null default now();
+
+alter table public.profiles alter column role set default 'USER';
+alter table public.profiles alter column status set default 'ACTIVE';
 
 create table if not exists public.wallets (
   id uuid primary key default gen_random_uuid(),
@@ -40,6 +45,14 @@ create table if not exists public.wallet_transactions (
   admin_id uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now()
 );
+
+alter table public.wallet_transactions add column if not exists amount bigint not null default 0;
+alter table public.wallet_transactions add column if not exists type text not null default 'LEGACY';
+alter table public.wallet_transactions add column if not exists reason text not null default 'Giao dịch cũ';
+alter table public.wallet_transactions add column if not exists admin_id uuid references public.profiles(id) on delete set null;
+
+alter table public.wallets add column if not exists balance bigint not null default 10000;
+alter table public.wallets add column if not exists updated_at timestamptz not null default now();
 
 create index if not exists wallet_transactions_user_created_idx on public.wallet_transactions(user_id, created_at desc);
 
@@ -63,6 +76,9 @@ create table if not exists public.game_rooms (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.game_rooms add column if not exists entry_fee bigint not null default 0;
+alter table public.game_rooms add column if not exists updated_at timestamptz not null default now();
 
 create index if not exists game_rooms_status_created_idx on public.game_rooms(status, created_at desc);
 create index if not exists game_rooms_owner_idx on public.game_rooms(owner_id);
@@ -89,15 +105,34 @@ create table if not exists public.game_sessions (
   updated_at timestamptz not null default now()
 );
 
+alter table public.game_sessions add column if not exists status text not null default 'PLAYING';
+alter table public.game_sessions add column if not exists current_state jsonb not null default '{}'::jsonb;
+alter table public.game_sessions add column if not exists winner_id uuid references public.profiles(id) on delete set null;
+alter table public.game_sessions add column if not exists started_at timestamptz not null default now();
+alter table public.game_sessions add column if not exists updated_at timestamptz not null default now();
+
 create index if not exists game_sessions_room_status_idx on public.game_sessions(room_id, status);
 
 create table if not exists public.chat_messages (
   id uuid primary key default gen_random_uuid(),
   channel_id text not null,
   user_id uuid not null references public.profiles(id) on delete cascade,
-  message text not null check (char_length(message) between 1 and 500),
-  created_at timestamptz not null default now()
+  message text,
+  content text,
+  user_display_name text,
+  user_role text,
+  expires_at timestamptz not null default (now() + interval '24 hours'),
+  created_at timestamptz not null default now(),
+  check (char_length(coalesce(content, message, '')) between 1 and 500)
 );
+
+alter table public.chat_messages add column if not exists message text;
+alter table public.chat_messages add column if not exists content text;
+alter table public.chat_messages add column if not exists user_display_name text;
+alter table public.chat_messages add column if not exists user_role text default 'USER';
+alter table public.chat_messages add column if not exists expires_at timestamptz not null default (now() + interval '24 hours');
+-- Legacy installations used message as NOT NULL; content is the canonical field now.
+alter table public.chat_messages alter column message drop not null;
 
 create index if not exists chat_messages_channel_created_idx on public.chat_messages(channel_id, created_at desc);
 
@@ -186,6 +221,17 @@ drop policy if exists wallets_self_select on public.wallets;
 create policy wallets_self_select on public.wallets for select to authenticated using (user_id = auth.uid());
 drop policy if exists wallet_transactions_self_select on public.wallet_transactions;
 create policy wallet_transactions_self_select on public.wallet_transactions for select to authenticated using (user_id = auth.uid());
+drop policy if exists game_rooms_public_select on public.game_rooms;
+create policy game_rooms_public_select on public.game_rooms for select to authenticated using (true);
+drop policy if exists game_room_players_public_select on public.game_room_players;
+create policy game_room_players_public_select on public.game_room_players for select to authenticated using (true);
+drop policy if exists chat_messages_public_select on public.chat_messages;
+create policy chat_messages_public_select on public.chat_messages for select to authenticated using (expires_at > now());
+
+alter table public.game_rooms replica identity full;
+alter table public.game_room_players replica identity full;
+alter table public.game_sessions replica identity full;
+alter table public.chat_messages replica identity full;
 
 -- Enable Realtime for the collaboration surfaces when they are not already registered.
 do $$

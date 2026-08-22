@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useRoomStore } from '@/stores/room.store';
 import { DEMO_ROOMS, GAME_CATALOG, GAME_BY_ID, formatCoins, type GameCategory } from '@/data/games';
@@ -28,8 +28,10 @@ const selectedDefinition = computed(() => GAME_BY_ID[createForm.value.game_id]);
 onMounted(async () => {
   if (route.query.create === '1') showCreateModal.value = true;
   if (route.query.game && GAME_BY_ID[route.query.game as string]) selectedGame.value = route.query.game as string;
-  try { await roomStore.fetchRooms(); } catch (error: any) { loadError.value = error.message || 'Không thể tải danh sách phòng từ Supabase.'; }
+  try { await roomStore.fetchRooms(); roomStore.subscribeToLobby(); } catch (error: any) { loadError.value = error.message || 'Không thể tải danh sách phòng từ Supabase.'; }
 });
+
+onUnmounted(() => roomStore.unsubscribeFromLobby());
 
 const updateGameDefaults = () => {
   const game = selectedDefinition.value;

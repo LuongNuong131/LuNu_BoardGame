@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 import { useWalletStore } from '@/stores/wallet.store';
@@ -14,7 +14,8 @@ const featuredGames = computed(() => GAME_CATALOG.filter((game) => game.featured
 const liveRooms = computed(() => roomStore.rooms.length ? roomStore.rooms.filter((room: any) => room.status === 'RUNNING').slice(0, 3) : import.meta.env.VITE_DEMO_MODE === 'true' ? DEMO_ROOMS.filter((room) => room.status === 'RUNNING') : []);
 const firstName = computed(() => (authStore.profile?.display_name || 'bạn').split(' ')[0]);
 
-onMounted(() => { walletStore.fetchBalance(); roomStore.fetchRooms().catch(() => undefined); });
+onMounted(() => { walletStore.fetchBalance(); roomStore.fetchRooms().then(() => roomStore.subscribeToLobby()).catch(() => undefined); });
+onUnmounted(() => roomStore.unsubscribeFromLobby());
 
 const enterRoom = (roomId: string) => router.push(`/room/${roomId}`);
 </script>

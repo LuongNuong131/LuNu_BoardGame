@@ -10,3 +10,16 @@ export const isSupabaseConfigured = Boolean(import.meta.env.VITE_SUPABASE_URL &&
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
 });
+
+export const prepareRealtimeAuth = async () => {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.access_token) supabase.realtime.setAuth(session.access_token);
+  return session;
+};
+
+// Realtime channels must receive the current JWT, otherwise Postgres changes can
+// connect as anonymous even while REST requests are authenticated.
+void prepareRealtimeAuth();
+supabase.auth.onAuthStateChange((_event, session) => {
+  if (session?.access_token) supabase.realtime.setAuth(session.access_token);
+});
