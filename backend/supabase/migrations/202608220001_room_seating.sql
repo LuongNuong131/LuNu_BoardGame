@@ -45,19 +45,15 @@ begin
     return jsonb_build_object('mode', existing_role, 'seatIndex', existing_seat);
   end if;
 
-  if room_record.status <> 'WAITING' then
-    assigned_role := 'SPECTATOR';
-  else
-    select candidate.seat into selected_seat
-    from generate_series(1, room_record.max_players) as candidate(seat)
-    where not exists (
-      select 1 from public.game_room_players p
-      where p.room_id = p_room_id and p.role = 'PLAYER' and p.seat_index = candidate.seat
-    )
-    order by candidate.seat
-    limit 1;
-    assigned_role := case when selected_seat is null then 'SPECTATOR' else 'PLAYER' end;
-  end if;
+  select candidate.seat into selected_seat
+  from generate_series(1, room_record.max_players) as candidate(seat)
+  where not exists (
+    select 1 from public.game_room_players p
+    where p.room_id = p_room_id and p.role = 'PLAYER' and p.seat_index = candidate.seat
+  )
+  order by candidate.seat
+  limit 1;
+  assigned_role := case when selected_seat is null then 'SPECTATOR' else 'PLAYER' end;
 
   insert into public.game_room_players(room_id, user_id, role, seat_index, is_ready, joined_at)
   values (p_room_id, p_user_id, assigned_role, selected_seat, assigned_role = 'PLAYER', now());

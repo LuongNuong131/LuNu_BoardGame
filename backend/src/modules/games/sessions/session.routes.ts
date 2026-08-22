@@ -6,6 +6,7 @@ export async function sessionRoutes(server: FastifyInstance) {
   server.addHook('preHandler', requireAuth);
   
   server.post('/room/:roomId/start', sessionController.startGame);
+  server.get('/room/:roomId/active', sessionController.getActiveRoomSession);
   server.get('/:sessionId', sessionController.getSessionState);
   server.post('/:sessionId/action', sessionController.playAction);
 }

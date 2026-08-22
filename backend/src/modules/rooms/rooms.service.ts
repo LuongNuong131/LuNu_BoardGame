@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../../infrastructure/supabase/client';
 import { AppError } from '../../shared/errors/AppError';
+import { gameRegistry } from '../games/core/GameRegistry';
 
 const isSeatingSchemaError = (error: any) => {
   const message = String(error?.message || '').toLowerCase();
@@ -64,9 +65,23 @@ export class RoomsService {
     return room;
   }
 
+  private async syncRunningSessionPlayer(roomId: string, userId: string) {
+    const { data: session } = await supabaseAdmin.from('game_sessions').select('id, game_id, current_state').eq('room_id', roomId).eq('status', 'PLAYING').order('started_at', { ascending: false }).limit(1).maybeSingle();
+    if (!session || session.current_state?.players?.includes(userId)) return;
+    const engine = gameRegistry.getEngine(session.game_id) as any;
+    if (typeof engine.addPlayer !== 'function') throw new AppError(409, 'SESSION_ADMISSION_UNSUPPORTED', 'Engine hiện tại chưa hỗ trợ nhận người chơi mới trong ván đang diễn ra.');
+    const nextState = engine.addPlayer(session.current_state, userId);
+    const { error: updateError } = await supabaseAdmin.from('game_sessions').update({ current_state: nextState, updated_at: new Date().toISOString() }).eq('id', session.id);
+    if (updateError) throw new AppError(500, 'SESSION_ADMISSION_FAILED', `Không thể đồng bộ ghế vào phiên chơi: ${updateError.message}`);
+  }
+
   async joinRoom(roomId: string, userId: string) {
     const atomicJoin = await supabaseAdmin.rpc('join_room', { p_room_id: roomId, p_user_id: userId });
-    if (!atomicJoin.error) return atomicJoin.data;
+    if (!atomicJoin.error) {
+      const result = atomicJoin.data as any;
+      if (result?.mode === 'PLAYER') await this.syncRunningSessionPlayer(roomId, userId);
+      return result;
+    }
     const atomicMessage = String(atomicJoin.error?.message || '').toLowerCase();
     if (!atomicMessage.includes('function') && !atomicMessage.includes('join_room') && !atomicMessage.includes('existing_record') && !isSeatingSchemaError(atomicJoin.error)) {
       if (atomicMessage.includes('room_not_found')) throw new AppError(404, 'ROOM_NOT_FOUND', 'Phòng không tồn tại.');
@@ -84,13 +99,7 @@ export class RoomsService {
       if (!room) throw new AppError(404, 'ROOM_NOT_FOUND', 'Phòng không tồn tại.');
       const participants = room.players || [];
       const existing = participants.find((participant: any) => participant.user_id === userId);
-      if (existing) return { mode: existing.role === 'SPECTATOR' ? 'SPECTATOR' : 'PLAYER', seatIndex: existing.seat_index };
-      if (room.status !== 'WAITING') {
-        const { error } = await supabaseAdmin.from('game_room_players').insert({ room_id: roomId, user_id: userId, role: 'SPECTATOR', seat_index: null, is_ready: false, joined_at: new Date().toISOString() });
-        if (error) throw new AppError(500, 'JOIN_FAILED', `Lỗi DB vào chế độ khán giả: ${error.message}`);
-        return { mode: 'SPECTATOR', seatIndex: null };
-      }
-
+      if (existing) { if (existing.role !== 'SPECTATOR' && room.status === 'RUNNING') await this.syncRunningSessionPlayer(roomId, userId); return { mode: existing.role === 'SPECTATOR' ? 'SPECTATOR' : 'PLAYER', seatIndex: existing.seat_index }; }
       const activePlayers = participants.filter((participant: any) => participant.role !== 'SPECTATOR');
       const occupiedSeats = activePlayers.map((participant: any) => participant.seat_index).filter((seat: any) => Number.isInteger(seat));
       const availableSeat = Array.from({ length: room.max_players }, (_, index) => index + 1).find((seat) => !occupiedSeats.includes(seat));
@@ -99,6 +108,7 @@ export class RoomsService {
         room_id: roomId, user_id: userId, role, seat_index: availableSeat || null, is_ready: role === 'PLAYER', joined_at: new Date().toISOString()
       });
       if (error) throw new AppError(500, 'JOIN_FAILED', `Lỗi DB join phòng: ${error.message}`);
+      if (role === 'PLAYER' && room.status === 'RUNNING') await this.syncRunningSessionPlayer(roomId, userId);
       return { mode: role, seatIndex: availableSeat || null };
     }
 
@@ -107,11 +117,11 @@ export class RoomsService {
     const legacy = await supabaseAdmin.from('game_rooms').select('id, status, max_players, players:game_room_players(user_id)').eq('id', roomId).single();
     if (legacy.error || !legacy.data) throw new AppError(404, 'ROOM_NOT_FOUND', 'Phòng không tồn tại.');
     const room = legacy.data as any;
-    if ((room.players || []).some((player: any) => player.user_id === userId)) return { mode: 'PLAYER', seatIndex: null };
-    if (room.status !== 'WAITING') throw new AppError(400, 'ROOM_NOT_WAITING', 'Trận đấu đang diễn ra. Hãy apply migration để bật chế độ khán giả.');
-    if ((room.players || []).length >= room.max_players) throw new AppError(400, 'ROOM_FULL', 'Phòng đầy. Hãy apply migration để bật chế độ khán giả.');
+    if ((room.players || []).some((player: any) => player.user_id === userId)) { if (room.status === 'RUNNING') await this.syncRunningSessionPlayer(roomId, userId); return { mode: 'PLAYER', seatIndex: null }; }
+    if ((room.players || []).length >= room.max_players) return { mode: 'SPECTATOR', seatIndex: null };
     const { error } = await supabaseAdmin.from('game_room_players').insert({ room_id: roomId, user_id: userId });
     if (error) throw new AppError(500, 'JOIN_FAILED', `Lỗi DB join phòng: ${error.message}`);
+    if (room.status === 'RUNNING') await this.syncRunningSessionPlayer(roomId, userId);
     return { mode: 'PLAYER', seatIndex: null };
   }
 

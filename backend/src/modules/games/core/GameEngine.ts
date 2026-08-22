@@ -6,6 +6,10 @@ export interface GameEngine<TState, TAction, TResult> {
   // Khởi tạo trạng thái game (chia bài, phát vai)
   initialize(players: string[], config: any): TState;
   
+  // Optional: admit a new human or AI seat while the room is already running.
+  addPlayer?(state: TState, playerId: string): TState;
+  getAiAction?(state: TState, playerId: string, difficulty: 'EASY' | 'MEDIUM' | 'HARD'): TAction | null;
+
   // Server-authoritative: Kiểm tra hành động có hợp lệ không
   validateAction(state: TState, action: TAction, playerId: string): boolean;
   

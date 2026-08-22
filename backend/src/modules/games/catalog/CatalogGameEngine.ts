@@ -117,6 +117,21 @@ export class CatalogGameEngine implements GameEngine<CatalogState, CatalogAction
     };
   }
 
+  addPlayer(state: CatalogState, playerId: string) {
+    if (state.players.includes(playerId)) return state;
+    const nextState = JSON.parse(JSON.stringify(state)) as CatalogState;
+    nextState.players.push(playerId);
+    nextState.hands[playerId] = [];
+    nextState.scores[playerId] = this.config.startingCoins;
+    nextState.bets[playerId] = 0;
+    nextState.folded[playerId] = false;
+    nextState.done[playerId] = false;
+    nextState.positions[playerId] = 0;
+    if (this.gameId === 'WEREWOLF') nextState.roles = { ...(nextState.roles || {}), [playerId]: 'VILLAGER' };
+    for (let index = 0; index < Math.min(this.config.handSize, 3) && nextState.deck.length; index += 1) nextState.hands[playerId].push(nextState.deck.shift()!);
+    return nextState;
+  }
+
   private currentPlayer(state: CatalogState) {
     return state.players[state.currentTurnIndex];
   }
@@ -128,6 +143,15 @@ export class CatalogGameEngine implements GameEngine<CatalogState, CatalogAction
   private hasCard(state: CatalogState, playerId: string, action: CatalogAction) {
     const requestedId = action.payload?.cardId || action.cardId || action.payload?.card?.id || action.card?.id;
     return Boolean(requestedId && state.hands[playerId]?.some((card) => card.id === requestedId));
+  }
+
+  getAiAction(state: CatalogState, playerId: string, difficulty: 'EASY' | 'MEDIUM' | 'HARD'): CatalogAction | null {
+    if (this.currentPlayer(state) !== playerId || this.isFinished(state)) return null;
+    if (this.config.category === 'board') return { type: difficulty === 'HARD' ? 'MOVE' : 'ROLL_DICE', payload: difficulty === 'HARD' ? { steps: 2 } : {} };
+    if (this.gameId === 'POKER' || this.gameId === 'LIENG') return { type: difficulty === 'HARD' ? 'RAISE' : difficulty === 'MEDIUM' ? 'CALL' : 'CHECK', payload: { amount: difficulty === 'HARD' ? 20 : 0 } };
+    if (this.gameId === 'BLACKJACK' || this.gameId === 'XI_DACH') return this.handTotal(state.hands[playerId]) < (difficulty === 'HARD' ? 18 : 16) ? { type: 'HIT' } : { type: 'STAND' };
+    if (state.hands[playerId]?.length) return { type: 'PLAY_CARD', payload: { cardId: state.hands[playerId][0].id } };
+    return { type: this.gameId === 'WEREWOLF' ? 'PASS' : 'DRAW_CARD' };
   }
 
   validateAction(state: CatalogState, action: CatalogAction, playerId: string): boolean {

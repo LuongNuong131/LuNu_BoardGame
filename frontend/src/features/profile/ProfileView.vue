@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref } from 'vue';
 import { useAuthStore } from '@/stores/auth.store';
 import { apiClient } from '@/services/api/apiClient';
+import { supabase } from '@/services/supabase/client';
 
 const authStore = useAuthStore();
 const profile = computed(() => authStore.profile || {});
@@ -26,6 +27,7 @@ const saveProfile = async () => {
 };
 
 const chooseAvatar = () => fileInput.value?.click();
+const safeUsername = () => String(profile.value.username || 'user').toLowerCase().replace(/[^a-z0-9_-]/g, '-') || 'user';
 const uploadAvatar = async (event: Event) => {
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
@@ -33,12 +35,24 @@ const uploadAvatar = async (event: Event) => {
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value);
   previewUrl.value = URL.createObjectURL(file);
   uploadingAvatar.value = true; feedback.value = ''; errorMessage.value = '';
-  const body = new FormData(); body.append('avatar', file, file.name);
+  const extension = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+  const oldPath = profile.value.avatar_path;
+  const path = `${profile.value.id}/avatar-${safeUsername()}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${extension}`;
   try {
-    const res: any = await apiClient.post('/auth/profile/avatar', body, { headers: { 'Content-Type': 'multipart/form-data' } });
-    if (res.success) { authStore.profile = res.data; URL.revokeObjectURL(previewUrl.value); previewUrl.value = ''; feedback.value = 'Ảnh đại diện mới đã được lưu. Ảnh cũ đã được dọn khỏi Storage.'; }
-  } catch (error: any) { errorMessage.value = error.message || 'Không thể tải ảnh lên.'; if (previewUrl.value) { URL.revokeObjectURL(previewUrl.value); previewUrl.value = ''; } }
-  finally { uploadingAvatar.value = false; if (fileInput.value) fileInput.value.value = ''; }
+    const uploaded = await supabase.storage.from('avatars').upload(path, file, { contentType: file.type, upsert: false, cacheControl: '3600' });
+    if (uploaded.error) throw new Error(uploaded.error.message);
+    const publicUrl = supabase.storage.from('avatars').getPublicUrl(path).data.publicUrl;
+    const res: any = await apiClient.patch('/auth/profile', { avatar_url: publicUrl, avatar_path: path });
+    if (!res.success) throw new Error('Không thể cập nhật hồ sơ avatar.');
+    authStore.profile = res.data;
+    if (oldPath && oldPath !== path) await supabase.storage.from('avatars').remove([oldPath]);
+    URL.revokeObjectURL(previewUrl.value); previewUrl.value = '';
+    feedback.value = 'Ảnh đại diện mới đã được lưu. Ảnh cũ đã được dọn khỏi Storage.';
+  } catch (error: any) {
+    errorMessage.value = error.message || 'Không thể tải ảnh lên.';
+    await supabase.storage.from('avatars').remove([path]);
+    if (previewUrl.value) { URL.revokeObjectURL(previewUrl.value); previewUrl.value = ''; }
+  } finally { uploadingAvatar.value = false; if (fileInput.value) fileInput.value.value = ''; }
 };
 
 onUnmounted(() => { if (previewUrl.value) URL.revokeObjectURL(previewUrl.value); });

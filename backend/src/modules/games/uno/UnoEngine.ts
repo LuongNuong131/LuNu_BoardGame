@@ -57,6 +57,23 @@ export class UnoEngine implements GameEngine<UnoState, UnoAction, any> {
     };
   }
 
+  addPlayer(state: UnoState, playerId: string): UnoState {
+    if (state.players.includes(playerId)) return state;
+    const nextState = JSON.parse(JSON.stringify(state)) as UnoState;
+    nextState.players.push(playerId);
+    nextState.hands[playerId] = [];
+    this.drawCards(nextState, nextState.players.length - 1, Math.min(7, nextState.deck.length));
+    return nextState;
+  }
+
+  getAiAction(state: UnoState, playerId: string, _difficulty: 'EASY' | 'MEDIUM' | 'HARD'): UnoAction | null {
+    if (state.players[state.currentTurnIndex] !== playerId || state.winner) return null;
+    const topCard = state.discardPile[state.discardPile.length - 1];
+    const playable = (state.hands[playerId] || []).find((card) => card.color === 'WILD' || card.color === state.currentColor || card.type === topCard.type);
+    if (!playable) return { type: 'DRAW_CARD', payload: {} };
+    return { type: 'PLAY_CARD', payload: { cardId: playable.id, chosenColor: playable.color === 'WILD' ? 'RED' : undefined } };
+  }
+
   // 3. Kiểm tra tính hợp lệ của nước đi (Server Authoritative)
   validateAction(state: UnoState, action: UnoAction, playerId: string): boolean {
     if (state.winner) return false; // Game over

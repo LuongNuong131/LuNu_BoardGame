@@ -6,6 +6,8 @@ export const useGameStore = defineStore('game', {
   state: () => ({
     session: null as any,
     gameState: null as any,
+    participants: [] as any[],
+    isPlayer: false,
     loading: false,
     realtimeStatus: 'DISCONNECTED' as string,
     activeSessionId: null as string | null,
@@ -21,6 +23,8 @@ export const useGameStore = defineStore('game', {
         if (res.success) {
           this.session = res.data.session;
           this.gameState = res.data.state;
+          this.participants = res.data.participants || [];
+          this.isPlayer = Boolean(res.data.isPlayer);
         }
       } finally {
         this.loading = false;

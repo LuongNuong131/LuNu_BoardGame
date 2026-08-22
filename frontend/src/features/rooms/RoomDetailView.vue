@@ -37,6 +37,7 @@ const realtimeLabel = computed(() => realtimeStatus.value === 'SUBSCRIBED' ? 'Re
 const seats = computed(() => Array.from({ length: room.value?.max_players || game.value.maxPlayers }, (_, index) => players.value.find((player: any) => player.seat === index + 1) || null));
 const isFull = computed(() => players.value.length >= (room.value?.max_players || game.value.maxPlayers));
 const currentUserIsOwner = computed(() => authStore.profile?.id && room.value?.owner_id === authStore.profile.id);
+const canStartAi = computed(() => Boolean(currentUserIsOwner.value && room.value && players.value.length === 1 && ['CHESS', 'CO_TUONG'].includes(room.value.game_id)));
 const canDeleteRoom = computed(() => Boolean(currentUserIsOwner.value || ['ADMIN', 'SUPER_ADMIN'].includes(authStore.profile?.role)));
 
 const scheduleRoomRefresh = (roomId: string) => {
@@ -84,11 +85,11 @@ onUnmounted(() => {
   if (refreshTimer) clearTimeout(refreshTimer);
 });
 
-const handleStartGame = async () => {
+const handleStartGame = async (againstAi = false) => {
   if (!room.value || String(room.value.id).startsWith('demo-')) { router.push(`/game/demo-${room.value?.game_id || 'WEREWOLF'}`); return; }
   isStarting.value = true;
   try {
-    const res: any = await apiClient.post(`/sessions/room/${room.value.id}/start`);
+    const res: any = await apiClient.post(`/sessions/room/${room.value.id}/start`, againstAi ? { against_ai: true, ai_level: 'MEDIUM' } : {});
     if (res.success) router.push(`/game/${res.data.sessionId}`);
   } catch (err: any) { uiStore.error(err.message || 'Không thể bắt đầu trận đấu.'); } finally { isStarting.value = false; }
 };
@@ -107,7 +108,15 @@ const leaveRoomAndExit = async () => {
 
 const takeSeat = async () => {
   if (!room.value || String(room.value.id).startsWith('demo-')) { router.push(`/game/${room.value?.id || 'demo'}`); return; }
-  try { await roomStore.joinRoom(room.value.id); await roomStore.fetchRoomDetail(room.value.id); uiStore.success('Đã đồng bộ vị trí của bạn trong phòng.'); } catch (err: any) { uiStore.error(err.message || 'Ghế vừa được người khác chọn.'); }
+  try {
+    const result: any = await roomStore.joinRoom(room.value.id);
+    await roomStore.fetchRoomDetail(room.value.id);
+    if (room.value.status === 'RUNNING') {
+      const active: any = await apiClient.get(`/sessions/room/${room.value.id}/active`);
+      if (active.data?.session?.id) { router.push(`/game/${active.data.session.id}`); return; }
+    }
+    uiStore.success(result?.mode === 'SPECTATOR' ? 'Bàn đã đủ ghế. Bạn đang vào chế độ khán giả realtime.' : 'Đã đồng bộ vị trí của bạn trong phòng.');
+  } catch (err: any) { uiStore.error(err.message || 'Ghế vừa được người khác chọn.'); }
 };
 </script>
 
@@ -129,7 +138,7 @@ const takeSeat = async () => {
           <div class="table-footer"><div class="table-footer-stat"><i class="bi bi-people-fill"></i><span><strong>{{ players.length }}/{{ room.max_players }}</strong><small>ghế đã chọn</small></span></div><div class="table-footer-stat"><i class="bi bi-eye"></i><span><strong>{{ spectators }}</strong><small>đang xem</small></span></div><div class="table-footer-note"><i class="bi bi-info-circle"></i> Khi bàn đầy, người mới vào sẽ tự động ở chế độ xem.</div></div>
         </section>
 
-        <section class="room-control-row mt-3"><div class="ready-state"><span class="ready-check"><i class="bi bi-check-lg"></i></span><div><strong>{{ isFull ? 'Bàn đã đủ người' : `${room.max_players - players.length} ghế đang mở` }}</strong><small>{{ isFull ? 'Bạn có thể theo dõi trực tiếp từ khu vực khán giả.' : 'Ghế được giữ theo thứ tự người chọn.' }}</small></div></div><button v-if="currentUserIsOwner || room.id.startsWith('demo-')" @click="handleStartGame" class="btn btn-gold px-4" :disabled="isStarting || (players.length < game.minPlayers)"><span v-if="isStarting" class="spinner-border spinner-border-sm me-2"></span><i v-else class="bi bi-play-fill me-1"></i>{{ players.length < game.minPlayers ? `Đợi đủ ${game.minPlayers} người` : 'Bắt đầu ván' }}</button><span v-else class="waiting-owner"><i class="bi bi-hourglass-split me-2"></i>Chờ chủ bàn bắt đầu</span></section>
+        <section class="room-control-row mt-3"><div class="ready-state"><span class="ready-check"><i class="bi bi-check-lg"></i></span><div><strong>{{ isFull ? 'Bàn đã đủ người' : `${room.max_players - players.length} ghế đang mở` }}</strong><small>{{ room.status === 'RUNNING' ? (isFull ? 'Bàn đang kín ghế; người mới sẽ xem realtime.' : 'Trận đang diễn ra; ghế trống vẫn nhận người thật.') : isFull ? 'Bạn có thể theo dõi trực tiếp từ khu vực khán giả.' : 'Ghế được giữ theo thứ tự người chọn.' }}</small></div></div><div class="d-flex gap-2"><button v-if="canStartAi" @click="handleStartGame(true)" class="btn btn-outline-gold px-3" :disabled="isStarting"><i class="bi bi-cpu me-1"></i>Đấu máy</button><button v-if="currentUserIsOwner || room.id.startsWith('demo-')" @click="handleStartGame()" class="btn btn-gold px-4" :disabled="isStarting || (players.length < game.minPlayers)"><span v-if="isStarting" class="spinner-border spinner-border-sm me-2"></span><i v-else class="bi bi-play-fill me-1"></i>{{ players.length < game.minPlayers ? `Đợi đủ ${game.minPlayers} người` : 'Bắt đầu ván' }}</button><span v-else class="waiting-owner"><i class="bi bi-hourglass-split me-2"></i>Chờ chủ bàn bắt đầu</span></div></section>
 
         <section class="guide-panel glass-panel mt-3"><div class="guide-header"><div><div class="eyebrow">How to play</div><h2>Hướng dẫn {{ game.name }}</h2></div><span class="guide-tag"><i class="bi bi-book me-1"></i> Luật riêng của bàn</span></div><div class="guide-content"><div class="guide-tabs"><button v-for="(_, index) in game.howToPlay" :key="index" :class="{active: activeGuide === index}" @click="activeGuide = index"><span>0{{ index + 1 }}</span>{{ index === 0 ? 'Bắt đầu' : index === 1 ? 'Trong ván' : 'Kết thúc' }}</button></div><div class="guide-step"><span class="step-number">0{{ activeGuide + 1 }}</span><div><h3>{{ game.howToPlay[activeGuide] }}</h3><p>{{ game.rules[activeGuide] || game.rules[0] }}</p></div></div></div></section>
       </main>
