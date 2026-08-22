@@ -3,12 +3,14 @@ import { ref, onMounted, computed, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useGameStore } from '@/stores/game.store';
 import { useAuthStore } from '@/stores/auth.store';
+import { useUiStore } from '@/stores/ui.store';
 import ChatBox from '@/components/ChatBox.vue';
 
 const route = useRoute();
 const router = useRouter();
 const gameStore = useGameStore();
 const authStore = useAuthStore();
+const uiStore = useUiStore();
 let refreshInterval: any;
 
 const showColorPicker = ref(false);
@@ -28,7 +30,7 @@ const fetchState = async () => {
   try {
     await gameStore.fetchGameState(route.params.sessionId as string);
     if (gameStore.gameState.winner) {
-      alert(`Trận đấu kết thúc! Người thắng: ${gameStore.gameState.winner === authStore.profile?.id ? 'BẠN' : 'ĐỐI THỦ'}`);
+      uiStore.success(`Trận đấu kết thúc! Người thắng: ${gameStore.gameState.winner === authStore.profile?.id ? 'BẠN' : 'ĐỐI THỦ'}`, 'Kết thúc ván đấu');
       clearInterval(refreshInterval);
       router.push('/rooms');
     }

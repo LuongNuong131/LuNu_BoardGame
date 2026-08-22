@@ -1,38 +1,37 @@
 import { defineStore } from 'pinia';
 import { apiClient } from '@/services/api/apiClient';
-import { supabase } from '@/services/supabase/client';
+import { prepareRealtimeAuth, supabase } from '@/services/supabase/client';
+
+let initializePromise: Promise<boolean> | null = null;
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     profile: null as any | null,
     isAuthenticated: false,
+    initialized: false,
     loading: false,
     error: null as string | null,
   }),
-  
   actions: {
     async login(username: string, password: string) {
       this.loading = true;
       this.error = null;
       try {
-        // 1. Gọi Backend API để lấy session
         const response: any = await apiClient.post('/auth/login', { username, password });
-        
         if (response.success && response.data.session) {
-          // 2. Gắn token vào Supabase Client của Frontend để API Interceptor tự lấy gửi đi
           const { access_token, refresh_token } = response.data.session;
           await supabase.auth.setSession({ access_token, refresh_token });
-          
-          // 3. Lấy thông tin Profile
+          await prepareRealtimeAuth();
           await this.fetchMe();
+          this.initialized = true;
           return true;
         }
+        this.error = 'Đăng nhập thất bại. Vui lòng kiểm tra thông tin.';
+        return false;
       } catch (err: any) {
         this.error = err.message || 'Đăng nhập thất bại. Vui lòng thử lại.';
         return false;
-      } finally {
-        this.loading = false;
-      }
+      } finally { this.loading = false; }
     },
 
     async fetchMe() {
@@ -41,27 +40,55 @@ export const useAuthStore = defineStore('auth', {
         if (response.success) {
           this.profile = response.data;
           this.isAuthenticated = true;
+          this.error = null;
+          return true;
         }
-      } catch (error) {
+      } catch (error: any) {
         this.profile = null;
+        if (error?.code === 'NETWORK_ERROR') {
+          this.isAuthenticated = true;
+          this.error = 'Đang chờ kết nối máy chủ. Phiên đăng nhập vẫn được giữ.';
+          return false;
+        }
         this.isAuthenticated = false;
         await supabase.auth.signOut();
       }
+      return false;
     },
 
     async logout() {
-      await apiClient.post('/auth/logout');
+      try { await apiClient.post('/auth/logout'); } catch { /* local session cleanup must still complete */ }
       await supabase.auth.signOut();
       this.profile = null;
       this.isAuthenticated = false;
+      this.initialized = true;
     },
-    
-    // Hàm này chạy 1 lần khi app khởi động để check session cũ
+
     async initialize() {
-      const { data } = await supabase.auth.getSession();
-      if (data.session) {
-        await this.fetchMe();
-      }
+      if (this.initialized) return this.isAuthenticated;
+      if (initializePromise) return initializePromise;
+      initializePromise = (async () => {
+        try {
+          const { data } = await supabase.auth.getSession();
+          if (data.session) {
+            let session = data.session;
+            if (session.expires_at && session.expires_at * 1000 < Date.now() + 30_000) {
+              const refreshed = await supabase.auth.refreshSession();
+              session = refreshed.data.session || session;
+            }
+            if (session.access_token) supabase.realtime.setAuth(session.access_token);
+            await this.fetchMe();
+          } else {
+            this.profile = null;
+            this.isAuthenticated = false;
+          }
+          return this.isAuthenticated;
+        } finally {
+          this.initialized = true;
+          initializePromise = null;
+        }
+      })();
+      return initializePromise;
     }
   }
 });

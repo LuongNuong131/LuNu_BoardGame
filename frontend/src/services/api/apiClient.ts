@@ -1,36 +1,37 @@
-import axios from 'axios';
-import { supabase } from '../supabase/client';
+import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
+import { prepareRealtimeAuth, supabase } from '../supabase/client';
+
+type RetryConfig = InternalAxiosRequestConfig & { _authRetried?: boolean };
 
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api',
   timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json'
-  }
+  headers: { 'Content-Type': 'application/json' }
 });
 
-// Request Interceptor: Tự động lấy JWT Token từ Supabase nhét vào Header gửi đi
 apiClient.interceptors.request.use(async (config) => {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  
-  if (token && config.headers) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
+  const session = await prepareRealtimeAuth();
+  const token = session?.access_token;
+  if (token && config.headers) config.headers.Authorization = `Bearer ${token}`;
   return config;
-}, (error) => {
-  return Promise.reject(error);
-});
+}, (error) => Promise.reject(error));
 
-// Response Interceptor: Chuẩn hóa định dạng lỗi từ Backend trả về
 apiClient.interceptors.response.use(
   (response) => response.data,
-  (error) => {
-    // Trích xuất mã lỗi chuẩn AppError từ Backend
-    const customError = error.response?.data?.error || {
-      code: 'NETWORK_ERROR',
-      message: error.message
-    };
+  async (error: AxiosError) => {
+    const config = error.config as RetryConfig | undefined;
+    if (error.response?.status === 401 && config && !config._authRetried) {
+      config._authRetried = true;
+      const refreshed = await supabase.auth.refreshSession();
+      const token = refreshed.data.session?.access_token;
+      if (token) {
+        await prepareRealtimeAuth();
+        config.headers = config.headers || {};
+        config.headers.Authorization = `Bearer ${token}`;
+        return apiClient.request(config);
+      }
+    }
+    const customError = (error.response?.data as any)?.error || { code: 'NETWORK_ERROR', message: error.message || 'Không thể kết nối máy chủ.' };
     return Promise.reject(customError);
   }
 );

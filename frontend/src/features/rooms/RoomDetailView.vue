@@ -8,11 +8,13 @@ import { prepareRealtimeAuth, supabase } from '@/services/supabase/client';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import ChatBox from '@/components/ChatBox.vue';
 import { DEMO_ROOMS, GAME_BY_ID, formatCoins } from '@/data/games';
+import { useUiStore } from '@/stores/ui.store';
 
 const route = useRoute();
 const router = useRouter();
 const roomStore = useRoomStore();
 const authStore = useAuthStore();
+const uiStore = useUiStore();
 const isStarting = ref(false);
 const activeGuide = ref(0);
 const realtimeStatus = ref('CONNECTING');
@@ -88,12 +90,12 @@ const handleStartGame = async () => {
   try {
     const res: any = await apiClient.post(`/sessions/room/${room.value.id}/start`);
     if (res.success) router.push(`/game/${res.data.sessionId}`);
-  } catch (err: any) { alert(err.message || 'Không thể bắt đầu trận đấu.'); } finally { isStarting.value = false; }
+  } catch (err: any) { uiStore.error(err.message || 'Không thể bắt đầu trận đấu.'); } finally { isStarting.value = false; }
 };
 
 const deleteCurrentRoom = async () => {
-  if (!room.value || !canDeleteRoom.value || !window.confirm(`Xóa phòng “${room.value.name}”? Tất cả ghế và phiên chờ sẽ bị dọn.`)) return;
-  try { await roomStore.deleteRoom(room.value.id); router.push('/rooms'); } catch (error: any) { alert(error.message || 'Không thể xóa phòng.'); }
+  if (!room.value || !canDeleteRoom.value || !await uiStore.confirmAction(`Xóa phòng “${room.value.name}”? Tất cả ghế và phiên chờ sẽ bị dọn.`, { title: 'Xóa phòng chơi', confirmLabel: 'Xóa phòng', tone: 'error' })) return;
+  try { await roomStore.deleteRoom(room.value.id); uiStore.success('Phòng đã được xóa và ghế đã giải phóng.'); router.push('/rooms'); } catch (error: any) { uiStore.error(error.message || 'Không thể xóa phòng.'); }
 };
 
 const leaveRoomAndExit = async () => {
@@ -105,7 +107,7 @@ const leaveRoomAndExit = async () => {
 
 const takeSeat = async () => {
   if (!room.value || String(room.value.id).startsWith('demo-')) { router.push(`/game/${room.value?.id || 'demo'}`); return; }
-  try { await roomStore.joinRoom(room.value.id); await roomStore.fetchRoomDetail(room.value.id); } catch (err: any) { alert(err.message || 'Ghế vừa được người khác chọn.'); }
+  try { await roomStore.joinRoom(room.value.id); await roomStore.fetchRoomDetail(room.value.id); uiStore.success('Đã đồng bộ vị trí của bạn trong phòng.'); } catch (err: any) { uiStore.error(err.message || 'Ghế vừa được người khác chọn.'); }
 };
 </script>
 

@@ -2,7 +2,9 @@
 import { computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
-import { useWalletStore } from '@/stores/wallet.store';
+import { useWalletStore } from './stores/wallet.store';
+import ToastViewport from './components/ToastViewport.vue';
+import ConfirmDialog from './components/ConfirmDialog.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -26,6 +28,8 @@ const logout = async () => {
 
 <template>
   <div class="app-shell">
+    <ToastViewport />
+    <ConfirmDialog />
     <template v-if="isGuestRoute">
       <router-view v-slot="{ Component }">
         <transition name="fade" mode="out-in"><component :is="Component" v-if="Component" /></transition>

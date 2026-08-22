@@ -16,7 +16,7 @@ const router = createRouter({ history: createWebHistory(), routes });
 
 router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore();
-  if (!authStore.isAuthenticated) await authStore.initialize();
+  await authStore.initialize();
 
   const isAuth = authStore.isAuthenticated;
   const role = authStore.profile?.role;

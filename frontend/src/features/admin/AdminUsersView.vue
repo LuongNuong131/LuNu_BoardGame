@@ -2,8 +2,10 @@
 import { computed, onMounted, ref } from 'vue';
 import { apiClient } from '@/services/api/apiClient';
 import { GAME_BY_ID } from '@/data/games';
+import { useUiStore } from '@/stores/ui.store';
 
 type AdminSection = 'overview' | 'users' | 'rooms' | 'games' | 'transactions';
+const uiStore = useUiStore();
 const activeSection = ref<AdminSection>('overview');
 const loading = ref(true);
 const actionLoading = ref(false);
@@ -58,7 +60,7 @@ const handleCreateUser = async () => {
 };
 
 const deleteUser = async (user: any) => {
-  if (!window.confirm(`Xóa vĩnh viễn tài khoản @${user.username}? Dữ liệu profile và ví sẽ bị xóa theo.`)) return;
+  if (!await uiStore.confirmAction(`Xóa vĩnh viễn tài khoản @${user.username}? Dữ liệu profile và ví sẽ bị xóa theo.`, { title: 'Xóa tài khoản vĩnh viễn', confirmLabel: 'Xóa tài khoản', tone: 'error' })) return;
   actionLoading.value = true;
   try {
     await apiClient.delete(`/admin/users/${user.id}`);
@@ -75,7 +77,7 @@ const changeUserStatus = async (user: any, status: string) => {
 };
 
 const deleteRoom = async (room: any) => {
-  if (!window.confirm(`Xóa phòng “${room.name}”?`)) return;
+  if (!await uiStore.confirmAction(`Xóa phòng “${room.name}”?`, { title: 'Xóa phòng chơi', confirmLabel: 'Xóa phòng', tone: 'error' })) return;
   actionLoading.value = true;
   try { await apiClient.delete(`/rooms/${room.id}`); rooms.value = rooms.value.filter((item) => item.id !== room.id); } catch (error: any) { errorMessage.value = error.message || 'Không thể xóa phòng.'; } finally { actionLoading.value = false; }
 };

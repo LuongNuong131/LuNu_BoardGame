@@ -3,12 +3,14 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useRoomStore } from '@/stores/room.store';
 import { useAuthStore } from '@/stores/auth.store';
+import { useUiStore } from '@/stores/ui.store';
 import { DEMO_ROOMS, GAME_CATALOG, GAME_BY_ID, formatCoins, type GameCategory } from '@/data/games';
 
 const router = useRouter();
 const route = useRoute();
 const roomStore = useRoomStore();
 const authStore = useAuthStore();
+const uiStore = useUiStore();
 const showCreateModal = ref(false);
 const searchTerm = ref('');
 const activeTab = ref<'all' | GameCategory>('all');
@@ -52,15 +54,15 @@ const enterRoom = async (room: any) => {
   if (!String(room.id).startsWith('demo-')) {
     try {
       await roomStore.joinRoom(room.id);
-    } catch (err: any) { alert(err.message || 'Không thể vào phòng.'); return; }
+    } catch (err: any) { uiStore.error(err.message || 'Không thể vào phòng.'); return; }
   }
   router.push(`/room/${room.id}`);
 };
 
 const canDeleteRoom = (room: any) => room.owner_id === authStore.profile?.id || ['ADMIN', 'SUPER_ADMIN'].includes(authStore.profile?.role);
 const removeRoom = async (room: any) => {
-  if (!canDeleteRoom(room) || !window.confirm(`Xóa phòng “${room.name}”? Hành động này không thể hoàn tác.`)) return;
-  try { await roomStore.deleteRoom(room.id); } catch (error: any) { loadError.value = error.message || 'Không thể xóa phòng.'; }
+  if (!canDeleteRoom(room) || !await uiStore.confirmAction(`Xóa phòng “${room.name}”? Hành động này không thể hoàn tác.`, { title: 'Xóa phòng chơi', confirmLabel: 'Xóa phòng', tone: 'error' })) return;
+  try { await roomStore.deleteRoom(room.id); uiStore.success('Phòng đã được xóa.'); } catch (error: any) { uiStore.error(error.message || 'Không thể xóa phòng.'); }
 };
 
 const handleCreate = async () => {
@@ -68,7 +70,7 @@ const handleCreate = async () => {
     const roomId = await roomStore.createRoom(createForm.value);
     showCreateModal.value = false;
     router.push(`/room/${roomId}`);
-  } catch (err: any) { alert(err.message || 'Không thể tạo phòng. Kiểm tra lại cấu hình.'); }
+  } catch (err: any) { uiStore.error(err.message || 'Không thể tạo phòng. Kiểm tra lại cấu hình.'); }
 };
 </script>
 
