@@ -1,208 +1,117 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { apiClient } from '@/services/api/apiClient';
+import { GAME_BY_ID } from '@/data/games';
 
+type AdminSection = 'overview' | 'users' | 'rooms' | 'games' | 'transactions';
+const activeSection = ref<AdminSection>('overview');
+const loading = ref(true);
+const actionLoading = ref(false);
+const errorMessage = ref('');
+const overview = ref<any>(null);
 const users = ref<any[]>([]);
-const loading = ref(false);
-const creating = ref(false);
-const newUser = ref({ username: '', password: '', display_name: '', role: 'USER' });
-
-// Modal State
-const showModal = ref(false);
+const rooms = ref<any[]>([]);
+const games = ref<any[]>([]);
+const transactions = ref<any[]>([]);
+const userSearch = ref('');
+const roomSearch = ref('');
+const showCreateUser = ref(false);
+const showWalletModal = ref(false);
 const selectedUser = ref<any>(null);
+const newUser = ref({ username: '', password: '', display_name: '', role: 'USER' });
 const walletForm = ref({ amount: 0, action: 'GRANT', reason: '' });
-const isProcessing = ref(false);
 
-const fetchUsers = async () => {
+const metrics = computed(() => overview.value?.metrics || { users: 0, rooms: 0, liveSessions: 0, transactions: 0 });
+const filteredUsers = computed(() => users.value.filter((user) => `${user.username} ${user.display_name}`.toLowerCase().includes(userSearch.value.toLowerCase())));
+const filteredRooms = computed(() => rooms.value.filter((room) => `${room.name} ${room.game_id} ${room.owner?.display_name || ''}`.toLowerCase().includes(roomSearch.value.toLowerCase())));
+
+const formatCoins = (value: number | string | undefined) => `${Number(value || 0).toLocaleString('vi-VN')} xu`;
+const formatDate = (value: string | undefined) => value ? new Date(value).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+const getGame = (gameId: string) => GAME_BY_ID[gameId] || { name: gameId, icon: 'bi-controller', accent: '#8d9b97' };
+const userBalance = (user: any) => user.wallets?.[0]?.balance || 0;
+
+const fetchAdminData = async () => {
   loading.value = true;
+  errorMessage.value = '';
   try {
-    const res: any = await apiClient.get('/admin/users');
-    if (res.success) users.value = res.data;
-  } catch (err) {
-    console.error(err);
-  } finally {
-    loading.value = false;
-  }
+    const [overviewRes, usersRes, roomsRes, gamesRes, transactionsRes] = await Promise.all([
+      apiClient.get('/admin/overview'), apiClient.get('/admin/users'), apiClient.get('/admin/rooms'), apiClient.get('/admin/games'), apiClient.get('/admin/transactions?limit=100')
+    ]) as any[];
+    if (overviewRes?.success) overview.value = overviewRes.data;
+    if (usersRes?.success) users.value = usersRes.data || [];
+    if (roomsRes?.success) rooms.value = roomsRes.data || [];
+    if (gamesRes?.success) games.value = gamesRes.data || [];
+    if (transactionsRes?.success) transactions.value = transactionsRes.data || [];
+  } catch (error: any) {
+    errorMessage.value = error.message || 'Không thể tải dữ liệu quản trị. Kiểm tra quyền ADMIN và schema Supabase.';
+  } finally { loading.value = false; }
 };
 
 const handleCreateUser = async () => {
-  creating.value = true;
+  actionLoading.value = true;
   try {
-    const res: any = await apiClient.post('/admin/users', newUser.value);
-    if (res.success) {
-      alert('Tạo người chơi thành công!');
-      newUser.value = { username: '', password: '', display_name: '', role: 'USER' };
-      await fetchUsers();
-    }
-  } catch (err: any) {
-    alert(err.message || 'Lỗi khi tạo user');
-  } finally {
-    creating.value = false;
-  }
+    await apiClient.post('/admin/users', newUser.value);
+    showCreateUser.value = false;
+    newUser.value = { username: '', password: '', display_name: '', role: 'USER' };
+    await fetchAdminData();
+  } catch (error: any) { errorMessage.value = error.message || 'Không thể tạo tài khoản.'; } finally { actionLoading.value = false; }
 };
 
-// Mở modal Nạp/Trừ tiền
-const openWalletModal = (user: any) => {
-  selectedUser.value = user;
-  walletForm.value = { amount: 0, action: 'GRANT', reason: '' };
-  showModal.value = true;
+const changeUserStatus = async (user: any, status: string) => {
+  actionLoading.value = true;
+  try {
+    await apiClient.patch(`/admin/users/${user.id}/status`, { status });
+    user.status = status;
+  } catch (error: any) { errorMessage.value = error.message || 'Không thể cập nhật trạng thái.'; } finally { actionLoading.value = false; }
 };
 
-// Xử lý Giao dịch
+const changeRoomStatus = async (room: any, status: string) => {
+  actionLoading.value = true;
+  try {
+    await apiClient.patch(`/admin/rooms/${room.id}/status`, { status });
+    room.status = status;
+  } catch (error: any) { errorMessage.value = error.message || 'Không thể cập nhật phòng.'; } finally { actionLoading.value = false; }
+};
+
+const openWalletModal = (user: any) => { selectedUser.value = user; walletForm.value = { amount: 0, action: 'GRANT', reason: '' }; showWalletModal.value = true; };
 const handleWalletAction = async () => {
-  if (walletForm.value.amount <= 0 || !walletForm.value.reason) {
-    alert('Vui lòng nhập số tiền hợp lệ và lý do.');
-    return;
-  }
-
-  isProcessing.value = true;
+  if (!selectedUser.value || walletForm.value.amount <= 0 || !walletForm.value.reason) return;
+  actionLoading.value = true;
   try {
-    const res: any = await apiClient.post('/wallet/admin/modify', {
-      target_user_id: selectedUser.value.id,
-      amount: walletForm.value.amount,
-      action: walletForm.value.action,
-      reason: walletForm.value.reason
-    });
-    
-    if (res.success) {
-      alert('Giao dịch thành công!');
-      showModal.value = false;
-      await fetchUsers(); // Refresh lại số dư
-    }
-  } catch (err: any) {
-    alert(err.message || 'Giao dịch thất bại');
-  } finally {
-    isProcessing.value = false;
-  }
+    await apiClient.post('/wallet/admin/modify', { target_user_id: selectedUser.value.id, amount: walletForm.value.amount, action: walletForm.value.action, reason: walletForm.value.reason });
+    showWalletModal.value = false;
+    await fetchAdminData();
+  } catch (error: any) { errorMessage.value = error.message || 'Giao dịch thất bại.'; } finally { actionLoading.value = false; }
 };
 
-onMounted(() => fetchUsers());
+onMounted(fetchAdminData);
 </script>
 
 <template>
-  <div class="container-fluid py-4 px-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-      <h2 class="fw-bold" style="color: var(--gv-primary)"><i class="bi bi-shield-lock-fill me-2"></i>QUẢN TRỊ HỆ THỐNG</h2>
-      <router-link to="/" class="btn btn-outline-light btn-sm"><i class="bi bi-house me-1"></i> Về Sảnh</router-link>
-    </div>
+  <div class="admin-page page-frame">
+    <div class="admin-head"><div><div class="eyebrow">Command center · restricted access</div><h1 class="page-title mb-2">Quản trị hệ thống</h1><p class="head-copy">Theo dõi sức khỏe câu lạc bộ, điều phối bàn chơi và quản lý tài sản thành viên.</p></div><div class="head-actions"><span class="admin-status"><span></span> Dữ liệu trực tiếp</span><button class="btn btn-quiet" @click="fetchAdminData"><i class="bi bi-arrow-clockwise me-2"></i>Làm mới</button><button class="btn btn-gold" @click="showCreateUser = true"><i class="bi bi-person-plus me-2"></i>Tạo tài khoản</button></div></div>
+    <div v-if="errorMessage" class="admin-error"><i class="bi bi-exclamation-triangle me-2"></i>{{ errorMessage }}<button @click="errorMessage = ''"><i class="bi bi-x"></i></button></div>
+    <div class="admin-tabs mt-4"><button v-for="tab in [{id:'overview',label:'Tổng quan',icon:'bi-grid-1x2'},{id:'users',label:'Người dùng',icon:'bi-people'},{id:'rooms',label:'Phòng chơi',icon:'bi-controller'},{id:'games',label:'Catalog game',icon:'bi-joystick'},{id:'transactions',label:'Giao dịch',icon:'bi-receipt'}]" :key="tab.id" :class="{active: activeSection === tab.id}" @click="activeSection = tab.id as AdminSection"><i :class="`bi ${tab.icon}`"></i>{{ tab.label }}</button></div>
 
-    <div class="row g-4">
-      <div class="col-md-3">
-        <div class="glass-panel p-4">
-          <h5 class="fw-bold mb-3"><i class="bi bi-person-plus-fill me-2"></i>Tạo Tài Khoản</h5>
-          <form @submit.prevent="handleCreateUser">
-            <div class="mb-3"><input v-model="newUser.username" type="text" class="form-control bg-dark text-light border-secondary" placeholder="Username" required></div>
-            <div class="mb-3"><input v-model="newUser.password" type="password" class="form-control bg-dark text-light border-secondary" placeholder="Password" required></div>
-            <div class="mb-3"><input v-model="newUser.display_name" type="text" class="form-control bg-dark text-light border-secondary" placeholder="Display Name" required></div>
-            <div class="mb-3">
-              <select v-model="newUser.role" class="form-select bg-dark text-light border-secondary">
-                <option value="USER">USER</option>
-                <option value="MODERATOR">MODERATOR</option>
-                <option value="ADMIN">ADMIN</option>
-              </select>
-            </div>
-            <button type="submit" class="btn w-100 fw-bold text-white" style="background: var(--gv-primary);" :disabled="creating">
-              {{ creating ? 'ĐANG TẠO...' : 'TẠO MỚI' }}
-            </button>
-          </form>
-        </div>
-      </div>
+    <div v-if="loading" class="admin-loading glass-panel"><div class="spinner-border text-warning"></div><p>Đang đồng bộ dữ liệu Supabase...</p></div>
+    <template v-else>
+      <section v-if="activeSection === 'overview'" class="admin-content"><div class="metric-grid"><div class="metric-card glass-panel"><div class="metric-icon gold"><i class="bi bi-people-fill"></i></div><div><small>Tổng thành viên</small><strong>{{ metrics.users.toLocaleString('vi-VN') }}</strong><span class="metric-trend positive"><i class="bi bi-arrow-up-right"></i> 12,4% tháng này</span></div></div><div class="metric-card glass-panel"><div class="metric-icon mint"><i class="bi bi-door-open"></i></div><div><small>Phòng đang mở</small><strong>{{ metrics.rooms.toLocaleString('vi-VN') }}</strong><span class="metric-trend"><i class="bi bi-broadcast"></i> Theo thời gian thực</span></div></div><div class="metric-card glass-panel"><div class="metric-icon purple"><i class="bi bi-lightning-charge-fill"></i></div><div><small>Ván đang diễn ra</small><strong>{{ metrics.liveSessions.toLocaleString('vi-VN') }}</strong><span class="metric-trend positive"><i class="bi bi-activity"></i> Hệ thống ổn định</span></div></div><div class="metric-card glass-panel"><div class="metric-icon rose"><i class="bi bi-arrow-left-right"></i></div><div><small>Giao dịch đã ghi nhận</small><strong>{{ metrics.transactions.toLocaleString('vi-VN') }}</strong><span class="metric-trend"><i class="bi bi-shield-check"></i> Có audit log</span></div></div></div><div class="overview-grid mt-4"><div class="overview-panel glass-panel"><div class="panel-heading"><div><div class="eyebrow">Live operations</div><h2>Phòng đang hoạt động</h2></div><button class="text-link" @click="activeSection = 'rooms'">Quản lý phòng <i class="bi bi-arrow-right"></i></button></div><div class="operation-list"><div v-for="room in overview?.activeRooms || []" :key="room.id" class="operation-row"><div class="operation-game" :style="{ color: getGame(room.game_id).accent }"><i :class="`bi ${getGame(room.game_id).icon}`"></i></div><div class="operation-name"><strong>{{ room.name }}</strong><small>{{ getGame(room.game_id).name }} · {{ room.owner?.display_name || 'Chủ bàn' }}</small></div><div class="operation-seats"><strong>{{ room.player_count }}/{{ room.max_players }}</strong><small>ghế · {{ room.spectator_count }} xem</small></div><span class="room-pill" :class="room.status.toLowerCase()">{{ room.status === 'RUNNING' ? 'Đang chơi' : 'Đang chờ' }}</span></div><div v-if="!overview?.activeRooms?.length" class="empty-mini">Chưa có phòng hoạt động.</div></div></div><div class="overview-panel glass-panel"><div class="panel-heading"><div><div class="eyebrow">Treasury flow</div><h2>Dòng tiền gần đây</h2></div><button class="text-link" @click="activeSection = 'transactions'">Mở sổ cái <i class="bi bi-arrow-right"></i></button></div><div class="transaction-list"><div v-for="transaction in overview?.recentTransactions || []" :key="transaction.id" class="transaction-row"><div class="transaction-avatar">{{ (transaction.user?.display_name || 'L').charAt(0) }}</div><div class="transaction-name"><strong>{{ transaction.user?.display_name || 'Thành viên' }}</strong><small>{{ transaction.reason }}</small></div><div class="transaction-amount" :class="Number(transaction.amount) >= 0 ? 'positive' : 'negative'">{{ Number(transaction.amount) >= 0 ? '+' : '' }}{{ formatCoins(transaction.amount) }}<small>{{ formatDate(transaction.created_at) }}</small></div></div><div v-if="!overview?.recentTransactions?.length" class="empty-mini">Chưa có giao dịch gần đây.</div></div></div></div></section>
 
-      <div class="col-md-9">
-        <div class="glass-panel p-4 h-100">
-          <h5 class="fw-bold mb-3"><i class="bi bi-people-fill me-2"></i>Danh Sách Tài Khoản</h5>
-          <div v-if="loading" class="text-center py-4"><div class="spinner-border text-info" role="status"></div></div>
-          
-          <div v-else class="table-responsive">
-            <table class="table table-dark table-hover align-middle">
-              <thead>
-                <tr class="text-muted">
-                  <th>USERNAME</th>
-                  <th>TÊN HIỂN THỊ</th>
-                  <th>CẤP ĐỘ</th>
-                  <th class="text-end">SỐ DƯ VÍ</th>
-                  <th class="text-center">THAO TÁC</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="user in users" :key="user.id">
-                  <td class="fw-bold">@{{ user.username }}</td>
-                  <td>{{ user.display_name }}</td>
-                  <td><span class="badge bg-secondary">{{ user.role }}</span></td>
-                  <td class="text-end text-success fw-bold">{{ user.wallets[0]?.balance.toLocaleString() }} <i class="bi bi-coin"></i></td>
-                  <td class="text-center">
-                    <button @click="openWalletModal(user)" class="btn btn-sm btn-outline-warning">
-                      <i class="bi bi-wallet-fill"></i> Nạp/Rút
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </div>
+      <section v-else-if="activeSection === 'users'" class="admin-content"><div class="content-toolbar"><div><div class="eyebrow">Member directory</div><h2 class="content-title">Người dùng <span>{{ users.length }}</span></h2></div><div class="toolbar-controls"><div class="admin-search"><i class="bi bi-search"></i><input v-model="userSearch" placeholder="Tìm username hoặc tên..."></div><button class="btn btn-gold" @click="showCreateUser = true"><i class="bi bi-plus-lg me-1"></i>Thêm mới</button></div></div><div class="data-panel glass-panel"><div class="data-table-wrap"><table class="admin-table"><thead><tr><th>THÀNH VIÊN</th><th>QUYỀN</th><th>TRẠNG THÁI</th><th>CẤP ĐỘ</th><th>SỐ DƯ</th><th>THAM GIA</th><th></th></tr></thead><tbody><tr v-for="user in filteredUsers" :key="user.id"><td><div class="member-cell"><img :src="user.avatar_url || `https://api.dicebear.com/9.x/shapes/svg?seed=${user.username}&backgroundColor=193a31`" alt=""><div><strong>{{ user.display_name }}</strong><small>@{{ user.username }}</small></div></div></td><td><span class="role-pill">{{ user.role }}</span></td><td><span class="status-pill" :class="user.status?.toLowerCase()"><span></span>{{ user.status || 'ACTIVE' }}</span></td><td><strong>Lv {{ user.level || 1 }}</strong><small class="sub-cell">{{ user.xp || 0 }} XP</small></td><td><strong class="coin-cell">{{ formatCoins(userBalance(user)) }}</strong></td><td><small>{{ formatDate(user.created_at) }}</small></td><td><div class="row-actions"><button class="row-action" title="Nạp / trừ tiền" @click="openWalletModal(user)"><i class="bi bi-wallet2"></i></button><select class="status-select" :value="user.status || 'ACTIVE'" @change="changeUserStatus(user, ($event.target as HTMLSelectElement).value)"><option value="ACTIVE">Active</option><option value="SUSPENDED">Suspend</option><option value="BANNED">Ban</option><option value="DISABLED">Disable</option></select></div></td></tr><tr v-if="filteredUsers.length === 0"><td colspan="7" class="empty-cell">Không tìm thấy thành viên phù hợp.</td></tr></tbody></table></div></div></section>
 
-    <!-- Modal Can Thiệp Ví -->
-    <div v-if="showModal" class="gv-modal-overlay">
-      <div class="gv-modal glass-panel p-4">
-        <h4 class="mb-1 fw-bold text-warning">CAN THIỆP VÍ</h4>
-        <p class="text-muted small mb-4">Mục tiêu: <span class="fw-bold text-light">@{{ selectedUser?.username }}</span></p>
-        
-        <form @submit.prevent="handleWalletAction">
-          <div class="mb-3">
-            <label class="form-label text-muted small fw-bold">HÀNH ĐỘNG</label>
-            <select v-model="walletForm.action" class="form-select bg-dark text-light border-secondary">
-              <option value="GRANT">CỘNG TIỀN (+)</option>
-              <option value="DEDUCT">TRỪ TIỀN (-)</option>
-            </select>
-          </div>
-          
-          <div class="mb-3">
-            <label class="form-label text-muted small fw-bold">SỐ TIỀN</label>
-            <input v-model="walletForm.amount" type="number" min="1" class="form-control bg-dark text-light border-secondary fs-4 fw-bold text-warning" required>
-          </div>
-          
-          <div class="mb-4">
-            <label class="form-label text-muted small fw-bold">LÝ DO (Bắt buộc ghi log)</label>
-            <input v-model="walletForm.reason" type="text" class="form-control bg-dark text-light border-secondary" placeholder="VD: Thưởng sự kiện, trừ tiền vi phạm..." required>
-          </div>
-          
-          <div class="d-flex gap-2 justify-content-end">
-            <button type="button" class="btn btn-secondary px-4" @click="showModal = false">Hủy</button>
-            <button type="submit" class="btn btn-warning px-4 fw-bold" :disabled="isProcessing">
-              {{ isProcessing ? 'ĐANG XỬ LÝ...' : 'XÁC NHẬN' }}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+      <section v-else-if="activeSection === 'rooms'" class="admin-content"><div class="content-toolbar"><div><div class="eyebrow">Table operations</div><h2 class="content-title">Phòng chơi <span>{{ rooms.length }}</span></h2></div><div class="toolbar-controls"><div class="admin-search"><i class="bi bi-search"></i><input v-model="roomSearch" placeholder="Tìm tên phòng hoặc game..."></div><router-link to="/rooms" class="btn btn-quiet"><i class="bi bi-box-arrow-up-right me-2"></i>Mở sảnh</router-link></div></div><div class="data-panel glass-panel"><div class="data-table-wrap"><table class="admin-table"><thead><tr><th>PHÒNG</th><th>GAME</th><th>CHỦ BÀN</th><th>GHẾ / XEM</th><th>PHÍ</th><th>TRẠNG THÁI</th><th></th></tr></thead><tbody><tr v-for="room in filteredRooms" :key="room.id"><td><div class="room-cell"><span class="room-cell-icon" :style="{color:getGame(room.game_id).accent}"><i :class="`bi ${getGame(room.game_id).icon}`"></i></span><div><strong>{{ room.name }}</strong><small>{{ formatDate(room.created_at) }}</small></div></div></td><td><span class="game-label">{{ getGame(room.game_id).name }}</span></td><td><small>{{ room.owner?.display_name || '—' }}</small></td><td><strong>{{ room.player_count || 0 }}/{{ room.max_players }}</strong><small class="sub-cell"><i class="bi bi-eye me-1"></i>{{ room.spectator_count || 0 }}</small></td><td><strong class="coin-cell">{{ room.entry_fee ? formatCoins(room.entry_fee) : 'Miễn phí' }}</strong></td><td><span class="room-pill" :class="room.status.toLowerCase()">{{ room.status }}</span></td><td><select class="status-select" :value="room.status" @change="changeRoomStatus(room, ($event.target as HTMLSelectElement).value)"><option value="WAITING">WAITING</option><option value="RUNNING">RUNNING</option><option value="FINISHED">FINISHED</option><option value="CANCELLED">CANCELLED</option></select></td></tr><tr v-if="filteredRooms.length === 0"><td colspan="7" class="empty-cell">Không có phòng nào.</td></tr></tbody></table></div></div></section>
+
+      <section v-else-if="activeSection === 'games'" class="admin-content"><div class="content-toolbar"><div><div class="eyebrow">Game catalog</div><h2 class="content-title">Catalog game <span>{{ games.length }}</span></h2></div><span class="catalog-note"><i class="bi bi-database-check"></i> Đồng bộ từ bảng <strong>games</strong> trên Supabase</span></div><div class="game-admin-grid"><div v-for="game in games" :key="game.id" class="game-admin-card glass-panel"><div class="game-admin-top"><span class="game-cell-icon" :style="{color:getGame(game.id).accent,background:`${getGame(game.id).accent}14`}"><i :class="`bi ${getGame(game.id).icon}`"></i></span><span class="active-dot" :class="{inactive: game.is_active === false}"><span></span>{{ game.is_active === false ? 'Tạm ẩn' : 'Đang mở' }}</span></div><h3>{{ game.name }}</h3><p><strong>{{ game.min_players }}–{{ game.max_players }}</strong> người chơi</p><div class="game-admin-footer"><span><i class="bi bi-bar-chart me-1"></i> Room ready</span><span class="game-id">{{ game.id }}</span></div></div><div v-if="!games.length" class="empty-state glass-panel"><i class="bi bi-database-x"></i><h3>Chưa có catalog</h3><p>Hãy chạy migration seed game trên Supabase.</p></div></div></section>
+
+      <section v-else class="admin-content"><div class="content-toolbar"><div><div class="eyebrow">Immutable audit log</div><h2 class="content-title">Sổ giao dịch <span>{{ transactions.length }}</span></h2></div><button class="btn btn-quiet" @click="fetchAdminData"><i class="bi bi-download me-2"></i>Làm mới dữ liệu</button></div><div class="data-panel glass-panel"><div class="data-table-wrap"><table class="admin-table"><thead><tr><th>THỜI GIAN</th><th>THÀNH VIÊN</th><th>LOẠI</th><th>LÝ DO</th><th>SỐ TIỀN</th><th>ADMIN</th></tr></thead><tbody><tr v-for="transaction in transactions" :key="transaction.id"><td><small>{{ formatDate(transaction.created_at) }}</small></td><td><div class="member-cell"><span class="transaction-avatar">{{ (transaction.user?.display_name || 'L').charAt(0) }}</span><div><strong>{{ transaction.user?.display_name || '—' }}</strong><small>@{{ transaction.user?.username || '—' }}</small></div></div></td><td><span class="type-pill">{{ transaction.type }}</span></td><td><small>{{ transaction.reason }}</small></td><td><strong class="transaction-amount" :class="Number(transaction.amount) >= 0 ? 'positive' : 'negative'">{{ Number(transaction.amount) >= 0 ? '+' : '' }}{{ formatCoins(transaction.amount) }}</strong></td><td><small>{{ transaction.admin?.display_name || 'Hệ thống' }}</small></td></tr><tr v-if="!transactions.length"><td colspan="6" class="empty-cell">Chưa có dữ liệu giao dịch.</td></tr></tbody></table></div></div></section>
+    </template>
+
+    <div v-if="showCreateUser" class="admin-modal-backdrop" @click.self="showCreateUser = false"><div class="admin-modal glass-panel"><div class="modal-heading"><div><div class="eyebrow">New member</div><h2>Tạo tài khoản</h2><p>Auth user sẽ được tạo trong Supabase Auth và profile/wallet tự động khởi tạo.</p></div><button class="modal-close" @click="showCreateUser = false"><i class="bi bi-x-lg"></i></button></div><form @submit.prevent="handleCreateUser"><label>Username<input v-model="newUser.username" class="form-control mt-2" required></label><label class="mt-3">Tên hiển thị<input v-model="newUser.display_name" class="form-control mt-2" required></label><label class="mt-3">Mật khẩu<input v-model="newUser.password" type="password" class="form-control mt-2" required></label><label class="mt-3">Quyền<select v-model="newUser.role" class="form-select mt-2"><option value="USER">USER</option><option value="MODERATOR">MODERATOR</option><option value="ADMIN">ADMIN</option></select></label><div class="modal-actions mt-4"><button type="button" class="btn btn-quiet" @click="showCreateUser = false">Hủy</button><button class="btn btn-gold" type="submit" :disabled="actionLoading">{{ actionLoading ? 'Đang tạo...' : 'Tạo tài khoản' }}</button></div></form></div></div>
+    <div v-if="showWalletModal" class="admin-modal-backdrop" @click.self="showWalletModal = false"><div class="admin-modal glass-panel"><div class="modal-heading"><div><div class="eyebrow">Treasury adjustment</div><h2>Điều chỉnh ví</h2><p>Thành viên: <strong>{{ selectedUser?.display_name }}</strong></p></div><button class="modal-close" @click="showWalletModal = false"><i class="bi bi-x-lg"></i></button></div><form @submit.prevent="handleWalletAction"><label>Loại giao dịch<select v-model="walletForm.action" class="form-select mt-2"><option value="GRANT">Cộng xu</option><option value="DEDUCT">Trừ xu</option></select></label><label class="mt-3">Số xu<input v-model.number="walletForm.amount" class="form-control mt-2" type="number" min="1" required></label><label class="mt-3">Lý do bắt buộc<input v-model="walletForm.reason" class="form-control mt-2" placeholder="Ví dụ: Thưởng giải đấu..." required></label><div class="modal-actions mt-4"><button type="button" class="btn btn-quiet" @click="showWalletModal = false">Hủy</button><button class="btn btn-gold" type="submit" :disabled="actionLoading">{{ actionLoading ? 'Đang ghi sổ...' : 'Xác nhận giao dịch' }}</button></div></form></div></div>
   </div>
 </template>
 
 <style scoped>
-.glass-panel {
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--glass-border);
-  border-radius: 12px;
-}
-.table-dark { --bs-table-bg: transparent; }
-
-/* Modal CSS */
-.gv-modal-overlay {
-  position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-  background: rgba(0, 0, 0, 0.7);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 1000;
-  backdrop-filter: blur(4px);
-}
-.gv-modal {
-  width: 100%; max-width: 450px;
-  animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-30px); }
-  to { opacity: 1; transform: translateY(0); }
-}
+.admin-page{padding-top:30px}.admin-head{display:flex;align-items:flex-end;justify-content:space-between;gap:22px}.head-copy{color:var(--gv-text-muted);font-size:.78rem}.head-actions{display:flex;align-items:center;gap:9px}.admin-status{display:flex;align-items:center;gap:6px;color:var(--gv-accent-success);font-size:.62rem;margin-right:8px}.admin-status span{width:6px;height:6px;border-radius:50%;background:var(--gv-accent-success);box-shadow:0 0 0 4px rgba(98,213,163,.1)}.admin-error{display:flex;align-items:center;margin-top:15px;padding:10px 12px;border:1px solid rgba(239,127,133,.24);border-radius:11px;color:#ef9a9e;background:rgba(239,127,133,.07);font-size:.64rem}.admin-error button{margin-left:auto;border:0;color:inherit;background:transparent}.admin-tabs{display:flex;gap:4px;padding-bottom:9px;border-bottom:1px solid rgba(255,255,255,.07);overflow:auto}.admin-tabs button{display:flex;align-items:center;gap:8px;white-space:nowrap;padding:10px 13px;border:0;border-radius:10px;color:var(--gv-text-muted);background:transparent;font-size:.67rem;font-weight:700}.admin-tabs button.active,.admin-tabs button:hover{color:var(--gv-primary);background:rgba(214,173,98,.08)}.admin-tabs i{font-size:.84rem}.admin-loading{padding:70px;text-align:center;margin-top:18px}.admin-loading p{color:var(--gv-text-muted);font-size:.68rem;margin:13px 0 0}.admin-content{padding-top:20px}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px}.metric-card{display:flex;align-items:center;gap:13px;padding:17px}.metric-icon{width:38px;height:38px;display:grid;place-items:center;flex:0 0 auto;border-radius:12px;font-size:.95rem}.metric-icon.gold{color:var(--gv-primary);background:rgba(214,173,98,.12)}.metric-icon.mint{color:var(--gv-secondary);background:rgba(88,199,176,.12)}.metric-icon.purple{color:#b79cff;background:rgba(156,123,255,.12)}.metric-icon.rose{color:#f18a9a;background:rgba(241,138,154,.12)}.metric-card small,.metric-card strong,.metric-trend{display:block}.metric-card small{color:var(--gv-text-muted);font-size:.61rem}.metric-card strong{font-size:1.2rem;letter-spacing:-.04em;margin:4px 0}.metric-trend{color:var(--gv-text-dim);font-size:.52rem}.metric-trend.positive{color:var(--gv-accent-success)}.overview-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:15px}.overview-panel{padding:19px}.panel-heading,.content-toolbar{display:flex;justify-content:space-between;align-items:flex-end;gap:14px}.panel-heading h2{font-size:.98rem;font-weight:800;margin:5px 0 0}.text-link{border:0;background:transparent;color:var(--gv-primary);font-size:.6rem;font-weight:800}.operation-list,.transaction-list{margin-top:18px}.operation-row,.transaction-row{display:flex;align-items:center;gap:10px;padding:11px 0;border-top:1px solid rgba(255,255,255,.06)}.operation-game{display:grid;place-items:center;width:31px;height:31px;border-radius:9px;background:rgba(255,255,255,.04)}.operation-name,.transaction-name{min-width:0;flex:1}.operation-name strong,.operation-name small,.transaction-name strong,.transaction-name small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.operation-name strong,.transaction-name strong{font-size:.67rem}.operation-name small,.transaction-name small{color:var(--gv-text-muted);font-size:.56rem;margin-top:3px}.operation-seats{text-align:right}.operation-seats strong,.operation-seats small{display:block}.operation-seats strong{font-size:.64rem}.operation-seats small{color:var(--gv-text-muted);font-size:.53rem;margin-top:3px}.room-pill,.status-pill,.role-pill,.type-pill,.active-dot{display:inline-flex;align-items:center;gap:5px;padding:5px 7px;border-radius:7px;font-size:.51rem;font-weight:800;letter-spacing:.03em}.room-pill.waiting{color:var(--gv-primary);background:rgba(214,173,98,.09)}.room-pill.running{color:var(--gv-accent-success);background:rgba(98,213,163,.09)}.room-pill.finished{color:var(--gv-text-muted);background:rgba(255,255,255,.06)}.room-pill.cancelled{color:#ef9a9e;background:rgba(239,127,133,.09)}.transaction-avatar{display:grid;place-items:center;flex:0 0 auto;width:27px;height:27px;border-radius:9px;color:var(--gv-primary);background:rgba(214,173,98,.11);font-size:.62rem;font-weight:800}.transaction-amount{text-align:right;color:var(--gv-text-main);font-size:.64rem}.transaction-amount.positive{color:var(--gv-accent-success)}.transaction-amount.negative{color:#ef9a9e}.transaction-amount small{display:block;color:var(--gv-text-dim);font-size:.51rem;margin-top:3px}.empty-mini{padding:25px 0;color:var(--gv-text-dim);font-size:.62rem;text-align:center}.content-title{font-size:1.12rem;font-weight:800;margin:5px 0 0}.content-title span{color:var(--gv-primary);font:500 .67rem 'DM Mono',monospace;margin-left:5px}.toolbar-controls{display:flex;align-items:center;gap:8px}.admin-search{display:flex;align-items:center;gap:8px;min-width:210px;padding:8px 11px;border:1px solid rgba(255,255,255,.08);border-radius:10px;color:var(--gv-text-dim);background:rgba(255,255,255,.03)}.admin-search input{width:100%;border:0;outline:0;color:var(--gv-text-main);background:transparent;font-size:.62rem}.data-panel{margin-top:14px;padding:0;overflow:hidden}.data-table-wrap{overflow:auto}.admin-table{width:100%;min-width:850px;border-collapse:collapse}.admin-table th{padding:13px 17px;color:var(--gv-text-dim);font-size:.53rem;letter-spacing:.11em;text-align:left;white-space:nowrap}.admin-table td{padding:12px 17px;border-top:1px solid rgba(255,255,255,.06);font-size:.64rem;vertical-align:middle}.admin-table tbody tr:hover{background:rgba(255,255,255,.02)}.member-cell,.room-cell{display:flex;align-items:center;gap:9px;min-width:150px}.member-cell img{width:29px;height:29px;border-radius:9px;background:#193a31;border:1px solid rgba(214,173,98,.2)}.member-cell strong,.member-cell small,.room-cell strong,.room-cell small,.admin-table td>small,.sub-cell{display:block}.member-cell strong,.room-cell strong{font-size:.65rem}.member-cell small,.room-cell small,.sub-cell{color:var(--gv-text-muted);font-size:.54rem;margin-top:3px}.role-pill{color:#b8a5ff;background:rgba(156,123,255,.1)}.status-pill{font-size:.51rem}.status-pill span{width:5px;height:5px;border-radius:50%;background:currentColor}.status-pill.active{color:var(--gv-accent-success);background:rgba(98,213,163,.09)}.status-pill.suspended{color:var(--gv-accent-warning);background:rgba(234,185,106,.09)}.status-pill.banned,.status-pill.disabled{color:#ef9a9e;background:rgba(239,127,133,.09)}.coin-cell{color:var(--gv-primary);font-size:.62rem}.row-actions{display:flex;align-items:center;gap:6px}.row-action{width:27px;height:27px;border:1px solid rgba(214,173,98,.18);border-radius:8px;color:var(--gv-primary);background:rgba(214,173,98,.06)}.status-select{border:1px solid rgba(255,255,255,.08);border-radius:7px;padding:5px 6px;color:var(--gv-text-muted);background:#122420;font-size:.52rem}.status-select option{background:#122420}.empty-cell{text-align:center!important;padding:42px!important;color:var(--gv-text-dim)!important}.room-cell-icon,.game-cell-icon{display:grid;place-items:center;flex:0 0 auto;width:30px;height:30px;border-radius:9px;background:rgba(255,255,255,.04)}.game-label{color:var(--gv-text-main);font-size:.6rem;font-weight:700}.catalog-note{color:var(--gv-text-muted);font-size:.6rem}.catalog-note i{color:var(--gv-accent-success);margin-right:5px}.catalog-note strong{color:var(--gv-text-main);font-family:'DM Mono',monospace;font-size:.57rem}.game-admin-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-top:16px}.game-admin-card{padding:16px}.game-admin-top{display:flex;align-items:center;justify-content:space-between}.game-admin-card h3{font-size:.82rem;font-weight:800;margin:20px 0 5px}.game-admin-card p{color:var(--gv-text-muted);font-size:.6rem;margin:0}.game-admin-card p strong{color:var(--gv-text-main)}.active-dot{color:var(--gv-accent-success);padding:0;background:transparent;font-size:.51rem;font-weight:600}.active-dot span{width:5px;height:5px;border-radius:50%;background:currentColor}.active-dot.inactive{color:var(--gv-text-dim)}.game-admin-footer{display:flex;justify-content:space-between;padding-top:13px;margin-top:15px;border-top:1px solid rgba(255,255,255,.06);color:var(--gv-text-muted);font-size:.54rem}.game-id{color:var(--gv-text-dim);font:500 .5rem 'DM Mono',monospace}.empty-state{padding:50px;text-align:center;grid-column:1/-1}.empty-state i{font-size:2rem;color:var(--gv-text-dim)}.empty-state h3{font-size:.9rem;margin:12px 0 5px}.empty-state p{font-size:.62rem;color:var(--gv-text-muted)}.admin-modal-backdrop{position:fixed;z-index:100;inset:0;display:grid;place-items:center;padding:15px;background:rgba(1,8,7,.82);backdrop-filter:blur(8px)}.admin-modal{width:min(100%,480px);padding:26px}.modal-heading{display:flex;justify-content:space-between;gap:15px}.modal-heading h2{font-size:1.3rem;font-weight:800;margin:6px 0}.modal-heading p{color:var(--gv-text-muted);font-size:.65rem;line-height:1.5}.modal-close{width:30px;height:30px;border:1px solid rgba(255,255,255,.08);border-radius:8px;color:var(--gv-text-muted);background:rgba(255,255,255,.03)}.admin-modal label{display:block;color:var(--gv-text-muted);font-size:.63rem;font-weight:700}.modal-actions{display:flex;justify-content:flex-end;gap:8px}
+@media(max-width:1100px){.metric-grid{grid-template-columns:repeat(2,1fr)}.overview-grid{grid-template-columns:1fr}.game-admin-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:700px){.admin-head{display:block}.head-actions{margin-top:18px;flex-wrap:wrap}.admin-status{margin-right:auto}.metric-grid,.game-admin-grid{grid-template-columns:repeat(2,1fr)}.content-toolbar{display:block}.toolbar-controls{margin-top:14px}.admin-search{min-width:0;flex:1}.overview-panel{padding:15px}.operation-row{gap:6px}.operation-seats,.room-pill{display:none}}@media(max-width:480px){.metric-grid,.game-admin-grid{grid-template-columns:1fr}.metric-card{padding:15px}}
 </style>

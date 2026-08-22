@@ -2,6 +2,7 @@
 -- The engines can be added independently behind the existing GameEngine contract.
 
 insert into public.games (id, name, min_players, max_players) values
+  ('UNO', 'UNO', 2, 8),
   ('WEREWOLF', 'Ma Sói', 6, 18),
   ('TIEN_LEN', 'Tiến lên', 2, 4),
   ('BLACKJACK', 'Blackjack', 1, 5),

@@ -3,16 +3,18 @@ import { computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 import { useWalletStore } from '@/stores/wallet.store';
+import { useRoomStore } from '@/stores/room.store';
 import { DEMO_ROOMS, GAME_BY_ID, GAME_CATALOG } from '@/data/games';
 
 const router = useRouter();
 const authStore = useAuthStore();
 const walletStore = useWalletStore();
+const roomStore = useRoomStore();
 const featuredGames = computed(() => GAME_CATALOG.filter((game) => game.featured).slice(0, 4));
-const liveRooms = computed(() => DEMO_ROOMS.filter((room) => room.status === 'RUNNING'));
+const liveRooms = computed(() => roomStore.rooms.length ? roomStore.rooms.filter((room: any) => room.status === 'RUNNING').slice(0, 3) : import.meta.env.VITE_DEMO_MODE === 'true' ? DEMO_ROOMS.filter((room) => room.status === 'RUNNING') : []);
 const firstName = computed(() => (authStore.profile?.display_name || 'bạn').split(' ')[0]);
 
-onMounted(() => walletStore.fetchBalance());
+onMounted(() => { walletStore.fetchBalance(); roomStore.fetchRooms().catch(() => undefined); });
 
 const enterRoom = (roomId: string) => router.push(`/room/${roomId}`);
 </script>
@@ -53,9 +55,9 @@ const enterRoom = (roomId: string) => router.push(`/room/${roomId}`);
           <div class="table-list mt-3">
             <div v-for="room in liveRooms" :key="room.id" class="table-row">
               <div class="table-game-icon" :style="{ color: GAME_BY_ID[room.game_id]?.accent }"><i :class="`bi ${GAME_BY_ID[room.game_id]?.icon}`"></i></div>
-              <div class="table-name"><strong>{{ room.name }}</strong><small>{{ GAME_BY_ID[room.game_id]?.name }} · Chủ bàn {{ room.ownerName }}</small></div>
-              <div class="table-occupancy"><span class="live-dot"></span>{{ room.occupied }}/{{ room.max_players }} chỗ</div>
-              <div class="table-viewers"><i class="bi bi-eye me-1"></i>{{ room.spectators }}</div>
+              <div class="table-name"><strong>{{ room.name }}</strong><small>{{ GAME_BY_ID[room.game_id]?.name || room.game_id }} · Chủ bàn {{ room.ownerName || room.owner?.display_name || 'Người chơi' }}</small></div>
+              <div class="table-occupancy"><span class="live-dot"></span>{{ room.occupied ?? room.player_count ?? 0 }}/{{ room.max_players }} chỗ</div>
+              <div class="table-viewers"><i class="bi bi-eye me-1"></i>{{ room.spectators ?? room.spectator_count ?? 0 }}</div>
               <button @click="enterRoom(room.id)" class="btn btn-sm btn-quiet">Xem bàn</button>
             </div>
           </div>

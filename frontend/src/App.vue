@@ -43,6 +43,7 @@ const logout = async () => {
           <router-link to="/" class="sidebar-link" exact-active-class="active"><i class="bi bi-grid-1x2-fill"></i><span>Tổng quan</span></router-link>
           <router-link to="/rooms" class="sidebar-link" active-class="active"><i class="bi bi-controller"></i><span>Sảnh game</span><span class="nav-ping">12</span></router-link>
           <router-link to="/wallet-history" class="sidebar-link" active-class="active"><i class="bi bi-wallet2"></i><span>Ví & giao dịch</span></router-link>
+          <router-link v-if="authStore.profile?.role === 'SUPER_ADMIN' || authStore.profile?.role === 'ADMIN'" to="/admin" class="sidebar-link" active-class="active"><i class="bi bi-shield-lock"></i><span>Quản trị hệ thống</span><span class="admin-tag">ADMIN</span></router-link>
         </nav>
         <div class="sidebar-label mt-4">Câu lạc bộ</div>
         <nav class="sidebar-nav">
@@ -93,6 +94,7 @@ const logout = async () => {
 .sidebar-link:hover, .sidebar-link.active { color: var(--gv-text-main); background: linear-gradient(90deg, rgba(214,173,98,.14), rgba(214,173,98,.03)); }
 .sidebar-link.active::before { content:''; position:absolute; left:-18px; top: 10px; bottom: 10px; width:3px; border-radius:4px; background:var(--gv-primary); }
 .nav-ping { margin-left:auto; color:#14211d; background:var(--gv-secondary); border-radius:999px; padding: 2px 7px; font-size:.62rem; font-weight:800; }
+.admin-tag { margin-left:auto; color:var(--gv-primary); font:500 .48rem 'DM Mono',monospace; letter-spacing:.06em; }
 .sidebar-spacer { flex:1; }
 .club-card { padding: 14px; border: 1px solid rgba(214,173,98,.2); border-radius: 15px; background: linear-gradient(145deg, rgba(214,173,98,.12), rgba(214,173,98,.03)); }
 .club-card p { color: var(--gv-text-muted); font-size: .68rem; line-height:1.55; margin: 0 0 12px; }

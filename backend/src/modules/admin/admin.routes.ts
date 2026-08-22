@@ -3,10 +3,15 @@ import * as adminController from './admin.controller';
 import { requireAuth, requireRole } from '../../middleware/auth.middleware';
 
 export async function adminRoutes(server: FastifyInstance) {
-  // Guard bảo vệ cấp độ Module: Bắt buộc Đăng nhập + Quyền Admin
   server.addHook('preHandler', requireAuth);
   server.addHook('preHandler', requireRole(['SUPER_ADMIN', 'ADMIN']));
 
+  server.get('/overview', adminController.getOverview);
   server.get('/users', adminController.getUsers);
   server.post('/users', adminController.createUser);
+  server.patch('/users/:id/status', adminController.updateUserStatus);
+  server.get('/rooms', adminController.getRooms);
+  server.patch('/rooms/:id/status', adminController.updateRoomStatus);
+  server.get('/games', adminController.getGames);
+  server.get('/transactions', adminController.getTransactions);
 }

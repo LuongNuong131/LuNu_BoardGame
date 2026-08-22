@@ -1,49 +1,61 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { supabaseAdmin } from '../../infrastructure/supabase/client';
 import { AppError } from '../../shared/errors/AppError';
+import { adminService } from './admin.service';
 
-// Lấy danh sách người dùng (Kèm ví)
-export const getUsers = async (request: FastifyRequest, reply: FastifyReply) => {
-  const { data, error } = await supabaseAdmin
-    .from('profiles')
-    .select(`
-      *,
-      wallets ( balance )
-    `)
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    throw new AppError(500, 'DB_ERROR', 'Không thể lấy danh sách người chơi.');
-  }
-
+export const getOverview = async (_request: FastifyRequest, reply: FastifyReply) => {
+  const data = await adminService.getOverview();
   return reply.send({ success: true, data, error: null });
 };
 
-// Admin tạo người chơi mới
+export const getUsers = async (_request: FastifyRequest, reply: FastifyReply) => {
+  const data = await adminService.getUsers();
+  return reply.send({ success: true, data, error: null });
+};
+
+export const getRooms = async (_request: FastifyRequest, reply: FastifyReply) => {
+  const data = await adminService.getRooms();
+  return reply.send({ success: true, data, error: null });
+};
+
+export const getGames = async (_request: FastifyRequest, reply: FastifyReply) => {
+  const data = await adminService.getGames();
+  return reply.send({ success: true, data, error: null });
+};
+
+export const getTransactions = async (request: FastifyRequest, reply: FastifyReply) => {
+  const limit = Math.min(Number((request.query as any)?.limit || 100), 500);
+  const data = await adminService.getTransactions(limit);
+  return reply.send({ success: true, data, error: null });
+};
+
+export const updateUserStatus = async (request: FastifyRequest, reply: FastifyReply) => {
+  const { id } = request.params as any;
+  const { status } = request.body as any;
+  const data = await adminService.updateUserStatus(id, status);
+  return reply.send({ success: true, data, error: null });
+};
+
+export const updateRoomStatus = async (request: FastifyRequest, reply: FastifyReply) => {
+  const { id } = request.params as any;
+  const { status } = request.body as any;
+  const data = await adminService.updateRoomStatus(id, status);
+  return reply.send({ success: true, data, error: null });
+};
+
 export const createUser = async (request: FastifyRequest, reply: FastifyReply) => {
   const { username, password, display_name, role } = request.body as any;
-
   if (!username || !password || !display_name) {
     throw new AppError(400, 'VALIDATION_ERROR', 'Vui lòng nhập đủ thông tin (Username, Password, Display Name).');
   }
 
   const internalEmail = `${username}@gameverse.local`;
-
-  // Gọi Auth Admin để tạo tài khoản (Sẽ kích hoạt Trigger SQL tạo Ví và mồi 10,000 tiền)
   const { data, error } = await supabaseAdmin.auth.admin.createUser({
     email: internalEmail,
-    password: password,
+    password,
     email_confirm: true,
-    user_metadata: {
-      username,
-      display_name,
-      role: role || 'USER'
-    }
+    user_metadata: { username, display_name, role: role || 'USER' }
   });
-
-  if (error) {
-    throw new AppError(400, 'CREATE_USER_FAILED', error.message);
-  }
-
+  if (error) throw new AppError(400, 'CREATE_USER_FAILED', error.message);
   return reply.send({ success: true, data: data.user, error: null });
 };

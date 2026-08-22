@@ -52,6 +52,13 @@ const handleStartGame = async () => {
   } catch (err: any) { alert(err.message || 'Không thể bắt đầu trận đấu.'); } finally { isStarting.value = false; }
 };
 
+const leaveRoomAndExit = async () => {
+  if (room.value && !String(room.value.id).startsWith('demo-')) {
+    try { await roomStore.leaveRoom(room.value.id); } catch { /* still allow the user to leave the view if the network is unavailable */ }
+  }
+  router.push('/rooms');
+};
+
 const takeSeat = async () => {
   if (!room.value || String(room.value.id).startsWith('demo-')) { router.push(`/game/${room.value?.id || 'demo'}`); return; }
   try { await roomStore.joinRoom(room.value.id); await roomStore.fetchRoomDetail(room.value.id); } catch (err: any) { alert(err.message || 'Ghế vừa được người khác chọn.'); }
@@ -60,7 +67,7 @@ const takeSeat = async () => {
 
 <template>
   <div class="page-frame room-page" v-if="room">
-    <div class="room-topline"><button class="back-link" @click="router.push('/rooms')"><i class="bi bi-arrow-left"></i> Sảnh game</button><div class="room-breadcrumb">{{ game.category === 'cards' ? 'Bàn bài' : game.category === 'board' ? 'Bàn cờ' : 'Social room' }} <span>/</span> {{ room.id.startsWith('demo-') ? 'Phòng mẫu' : 'Phòng riêng' }}</div><div class="room-top-actions"><span class="secure-label"><i class="bi bi-shield-check"></i> Bàn an toàn</span><button class="icon-button"><i class="bi bi-share"></i></button></div></div>
+    <div class="room-topline"><button class="back-link" @click="leaveRoomAndExit"><i class="bi bi-arrow-left"></i> Sảnh game</button><div class="room-breadcrumb">{{ game.category === 'cards' ? 'Bàn bài' : game.category === 'board' ? 'Bàn cờ' : 'Social room' }} <span>/</span> {{ room.id.startsWith('demo-') ? 'Phòng mẫu' : 'Phòng riêng' }}</div><div class="room-top-actions"><span class="secure-label"><i class="bi bi-shield-check"></i> Bàn an toàn</span><button class="icon-button"><i class="bi bi-share"></i></button></div></div>
     <div class="room-header mt-4"><div><div class="eyebrow"><span class="live-dot"></span> {{ room.status === 'RUNNING' ? 'Trận đấu đang diễn ra' : 'Phòng chờ · mở cửa' }}</div><h1 class="page-title mb-2">{{ room.name }}</h1><p>{{ game.description }}</p></div><div class="room-header-stats"><div><small>Phí vào bàn</small><strong>{{ room.entry_fee ? formatCoins(room.entry_fee) : 'Miễn phí' }}</strong></div><div><small>Thời lượng</small><strong>{{ game.duration }}</strong></div><div><small>Người xem</small><strong><i class="bi bi-eye me-1"></i>{{ spectators }}</strong></div></div></div>
 
     <div class="room-grid-layout mt-4">
