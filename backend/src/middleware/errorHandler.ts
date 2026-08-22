@@ -1,27 +1,31 @@
-import { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
+import { FastifyError, FastifyRequest, FastifyReply } from 'fastify';
 import { AppError } from '../shared/errors/AppError';
 
-export const errorHandler = (error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
-  request.log.error({ err: error }, 'Global error handler caught an error');
+export const errorHandler = (error: FastifyError | AppError | Error, request: FastifyRequest, reply: FastifyReply) => {
+  request.log.error(error);
 
-  if (error instanceof AppError) {
-    return reply.status(error.statusCode).send({
+  // Trick: Dùng duck-typing kiểm tra thuộc tính thay vì instanceof để chống lỗi class kế thừa
+  if ('statusCode' in error && 'errorCode' in error) {
+    const appErr = error as AppError;
+    return reply.status(appErr.statusCode).send({
       success: false,
       data: null,
       error: {
-        code: error.code,
-        message: error.message
+        code: appErr.errorCode,
+        message: appErr.message
       }
     });
   }
 
-  // Fallback for unhandled/native errors
+  // Nếu là lỗi hệ thống / Supabase quăng ra, lôi thẳng message ra để dễ debug
+  const errorMessage = error.message || 'Internal Server Error';
+  
   return reply.status(500).send({
     success: false,
     data: null,
     error: {
       code: 'INTERNAL_SERVER_ERROR',
-      message: 'An unexpected error occurred.'
+      message: `Lỗi Hệ Thống: ${errorMessage}` // Bây giờ Frontend sẽ hiển thị chính xác lỗi này
     }
   });
 };

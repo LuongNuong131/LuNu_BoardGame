@@ -4,10 +4,10 @@
 
 <template>
   <div class="app-container d-flex flex-column align-items-center justify-content-center">
-    <!-- Router View sẽ tự động hiển thị Login hoặc Home tùy vào URL -->
+    <!-- Thêm v-if="Component" để chống lỗi Cannot destructure property -->
     <router-view v-slot="{ Component }">
       <transition name="fade" mode="out-in">
-        <component :is="Component" />
+        <component :is="Component" v-if="Component" />
       </transition>
     </router-view>
   </div>

@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useRoomStore } from '@/stores/room.store';
-import ChatBox from '@/components/ChatBox.vue'; // IMPORT COMPONENT CHAT
+import ChatBox from '@/components/ChatBox.vue';
 
 const router = useRouter();
 const roomStore = useRoomStore();
@@ -38,7 +38,7 @@ const handleJoin = async (roomId: string) => {
     </div>
 
     <div class="row g-4">
-      <!-- Cột trái: Danh sách phòng (7 cột) -->
+      <!-- Cột trái: Danh sách phòng -->
       <div class="col-lg-8">
         <div class="row g-3">
           <div v-if="roomStore.loading" class="col-12 text-center py-5"><div class="spinner-border text-info"></div></div>
@@ -54,11 +54,14 @@ const handleJoin = async (roomId: string) => {
                 <span class="badge bg-warning text-dark" v-else>{{ room.entry_fee }} <i class="bi bi-coin"></i></span>
               </div>
               <h5 class="fw-bold mb-1 text-light truncate">{{ room.name }}</h5>
-              <p class="text-muted small mb-3">Chủ phòng: @{{ room.owner.display_name }}</p>
+              
+              <!-- Áp dụng Optional Chaining bảo vệ chống null -->
+              <p class="text-muted small mb-3">Chủ phòng: @{{ room.owner?.display_name || 'Người chơi ẩn danh' }}</p>
+              
               <div class="d-flex justify-content-between align-items-center">
-                <div class="text-info small fw-bold"><i class="bi bi-people-fill me-1"></i> {{ room.players[0].count }} / {{ room.max_players }}</div>
-                <button @click="handleJoin(room.id)" class="btn btn-sm btn-outline-primary fw-bold" :disabled="room.players[0].count >= room.max_players">
-                  {{ room.players[0].count >= room.max_players ? 'ĐÃ ĐẦY' : 'THAM GIA' }}
+                <div class="text-info small fw-bold"><i class="bi bi-people-fill me-1"></i> {{ room.players?.[0]?.count || 0 }} / {{ room.max_players }}</div>
+                <button @click="handleJoin(room.id)" class="btn btn-sm btn-outline-primary fw-bold" :disabled="(room.players?.[0]?.count || 0) >= room.max_players">
+                  {{ (room.players?.[0]?.count || 0) >= room.max_players ? 'ĐÃ ĐẦY' : 'THAM GIA' }}
                 </button>
               </div>
             </div>
@@ -66,13 +69,13 @@ const handleJoin = async (roomId: string) => {
         </div>
       </div>
 
-      <!-- Cột phải: WORLD CHAT (4 cột) -->
+      <!-- Cột phải: WORLD CHAT -->
       <div class="col-lg-4" style="height: calc(100vh - 150px);">
         <ChatBox channelId="WORLD" title="KÊNH THẾ GIỚI" />
       </div>
     </div>
 
-    <!-- Modal Tạo phòng giữ nguyên như cũ -->
+    <!-- Modal Tạo phòng -->
     <div v-if="showCreateModal" class="gv-modal-overlay">
       <div class="gv-modal glass-panel p-4">
         <h4 class="mb-4 fw-bold text-white"><i class="bi bi-plus-square-fill me-2 text-primary"></i>THIẾT LẬP PHÒNG CHƠI</h4>

@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
+import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 
 const routes: Array<RouteRecordRaw> = [
@@ -15,13 +15,25 @@ const router = createRouter({ history: createWebHistory(), routes });
 
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore();
-  if (!authStore.isAuthenticated) await authStore.initialize();
+  
+  // Khởi tạo session nếu trang vừa được F5 tải lại
+  if (!authStore.isAuthenticated) {
+    await authStore.initialize();
+  }
+
   const isAuth = authStore.isAuthenticated;
   const role = authStore.profile?.role;
 
-  if (to.meta.requiresAuth && !isAuth) next({ name: 'Login' });
-  else if (to.meta.requiresGuest && isAuth) next({ name: 'Home' });
-  else if (to.meta.requiresAdmin && role !== 'SUPER_ADMIN' && role !== 'ADMIN') next({ name: 'Home' });
-  else next();
+  // Logic bảo vệ route
+  if (to.meta.requiresAuth && !isAuth) {
+    next({ name: 'Login' });
+  } else if (to.meta.requiresGuest && isAuth) {
+    next({ name: 'Home' });
+  } else if (to.meta.requiresAdmin && role !== 'SUPER_ADMIN' && role !== 'ADMIN') {
+    next({ name: 'Home' });
+  } else {
+    next();
+  }
 });
+
 export default router;

@@ -1,0 +1,57 @@
+@import 'bootstrap/dist/css/bootstrap.min.css';
+@import 'bootstrap-icons/font/bootstrap-icons.css';
+
+:root {
+  /* Premium Dark Gaming Color Palette */
+  --gv-bg-dark: #0a0c10;
+  --gv-bg-card: #161b22;
+  --gv-primary: #6366f1;
+  --gv-primary-hover: #4f46e5;
+  --gv-secondary: #0ea5e9;
+  --gv-text-main: #f8fafc;
+  --gv-text-muted: #94a3b8;
+  --gv-accent-success: #10b981;
+  --gv-accent-danger: #ef4444;
+  --gv-accent-warning: #f59e0b;
+
+  /* Glassmorphism Variables */
+  --glass-bg: rgba(22, 27, 34, 0.6);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur: blur(12px);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+body {
+  background-color: var(--gv-bg-dark);
+  color: var(--gv-text-main);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Reusable Glass Panel Class */
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: 16px;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
