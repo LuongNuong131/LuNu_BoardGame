@@ -12,7 +12,8 @@ export class RoomsService {
     const modern = await supabaseAdmin
       .from('game_rooms')
       .select('id, name, game_id, owner_id, max_players, status, entry_fee, created_at, owner:profiles!game_rooms_owner_id_fkey(display_name), participants:game_room_players(role)')
-      .eq('status', 'WAITING')
+      .in('status', ['WAITING', 'RUNNING'])
+      .order('status', { ascending: true })
       .order('created_at', { ascending: false });
 
     if (!modern.error) {
@@ -32,7 +33,8 @@ export class RoomsService {
     const legacy = await supabaseAdmin
       .from('game_rooms')
       .select('id, name, game_id, owner_id, max_players, status, entry_fee, created_at, owner:profiles!game_rooms_owner_id_fkey(display_name), players:game_room_players(count)')
-      .eq('status', 'WAITING')
+      .in('status', ['WAITING', 'RUNNING'])
+      .order('status', { ascending: true })
       .order('created_at', { ascending: false });
     if (legacy.error) throw new AppError(500, 'DB_ERROR', `Lỗi tải sảnh: ${legacy.error.message}`);
     return (legacy.data || []).map((room: any) => ({ ...room, player_count: room.players?.[0]?.count || 0, spectator_count: 0 }));
@@ -66,20 +68,37 @@ export class RoomsService {
   }
 
   private async syncRunningSessionPlayer(roomId: string, userId: string) {
-    const { data: session } = await supabaseAdmin.from('game_sessions').select('id, game_id, current_state').eq('room_id', roomId).eq('status', 'PLAYING').order('started_at', { ascending: false }).limit(1).maybeSingle();
-    if (!session || session.current_state?.players?.includes(userId)) return;
-    const engine = gameRegistry.getEngine(session.game_id) as any;
-    if (typeof engine.addPlayer !== 'function') throw new AppError(409, 'SESSION_ADMISSION_UNSUPPORTED', 'Engine hiện tại chưa hỗ trợ nhận người chơi mới trong ván đang diễn ra.');
-    const nextState = engine.addPlayer(session.current_state, userId);
-    const { error: updateError } = await supabaseAdmin.from('game_sessions').update({ current_state: nextState, updated_at: new Date().toISOString() }).eq('id', session.id);
-    if (updateError) throw new AppError(500, 'SESSION_ADMISSION_FAILED', `Không thể đồng bộ ghế vào phiên chơi: ${updateError.message}`);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const { data: session } = await supabaseAdmin.from('game_sessions').select('id, game_id, current_state, updated_at').eq('room_id', roomId).eq('status', 'PLAYING').order('started_at', { ascending: false }).limit(1).maybeSingle();
+      if (!session) return null;
+      if (session.current_state?.players?.includes(userId)) return session.id;
+      const engine = gameRegistry.getEngine(session.game_id) as any;
+      if (typeof engine.addPlayer !== 'function') throw new AppError(409, 'SESSION_ADMISSION_UNSUPPORTED', 'Engine hiện tại chưa hỗ trợ nhận người chơi mới trong ván đang diễn ra.');
+      let nextState = engine.addPlayer(session.current_state, userId);
+      const aiId = session.current_state.players?.find((player: string) => player.startsWith('AI_'));
+      if (aiId) {
+        const aiIndex = session.current_state.players.indexOf(aiId);
+        const admittedHand = nextState.hands[userId];
+        nextState.players = session.current_state.players.map((player: string, index: number) => index === aiIndex ? userId : player);
+        nextState.hands[userId] = admittedHand;
+        delete nextState.hands[aiId]; delete nextState.scores[aiId]; delete nextState.bets[aiId]; delete nextState.folded[aiId]; delete nextState.done[aiId]; delete nextState.positions[aiId];
+        if (nextState.roles) { nextState.roles[userId] = nextState.roles[aiId] || 'VILLAGER'; delete nextState.roles[aiId]; }
+        if (nextState.votes) { Object.entries(nextState.votes).forEach(([voter, target]) => { if (voter === aiId) delete nextState.votes[voter]; else if (target === aiId) nextState.votes[voter] = userId; }); }
+      }
+      const { data: persisted, error: updateError } = await supabaseAdmin.from('game_sessions').update({ current_state: nextState, updated_at: new Date().toISOString() }).eq('id', session.id).eq('updated_at', session.updated_at).select('id').maybeSingle();
+      if (updateError) throw new AppError(500, 'SESSION_ADMISSION_FAILED', `Không thể đồng bộ ghế vào phiên chơi: ${updateError.message}`);
+      if (persisted) return session.id;
+      await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)));
+    }
+    throw new AppError(409, 'SESSION_ADMISSION_CONFLICT', 'Bàn vừa nhận người chơi khác. Vui lòng mở lại bàn để nhận ghế mới nhất.');
   }
 
   async joinRoom(roomId: string, userId: string) {
     const atomicJoin = await supabaseAdmin.rpc('join_room', { p_room_id: roomId, p_user_id: userId });
     if (!atomicJoin.error) {
       const result = atomicJoin.data as any;
-      if (result?.mode === 'PLAYER') await this.syncRunningSessionPlayer(roomId, userId);
+      if (result?.mode === 'PLAYER') return { ...result, activeSessionId: await this.syncRunningSessionPlayer(roomId, userId) };
+      if (result?.mode === 'SPECTATOR') { const { data: activeSession } = await supabaseAdmin.from('game_sessions').select('id').eq('room_id', roomId).eq('status', 'PLAYING').order('started_at', { ascending: false }).limit(1).maybeSingle(); return { ...result, activeSessionId: activeSession?.id || null }; }
       return result;
     }
     const atomicMessage = String(atomicJoin.error?.message || '').toLowerCase();
@@ -99,7 +118,7 @@ export class RoomsService {
       if (!room) throw new AppError(404, 'ROOM_NOT_FOUND', 'Phòng không tồn tại.');
       const participants = room.players || [];
       const existing = participants.find((participant: any) => participant.user_id === userId);
-      if (existing) { if (existing.role !== 'SPECTATOR' && room.status === 'RUNNING') await this.syncRunningSessionPlayer(roomId, userId); return { mode: existing.role === 'SPECTATOR' ? 'SPECTATOR' : 'PLAYER', seatIndex: existing.seat_index }; }
+      if (existing) { if (existing.role !== 'SPECTATOR' && room.status === 'RUNNING') return { mode: 'PLAYER', seatIndex: existing.seat_index, activeSessionId: await this.syncRunningSessionPlayer(roomId, userId) }; return { mode: existing.role === 'SPECTATOR' ? 'SPECTATOR' : 'PLAYER', seatIndex: existing.seat_index }; }
       const activePlayers = participants.filter((participant: any) => participant.role !== 'SPECTATOR');
       const occupiedSeats = activePlayers.map((participant: any) => participant.seat_index).filter((seat: any) => Number.isInteger(seat));
       const availableSeat = Array.from({ length: room.max_players }, (_, index) => index + 1).find((seat) => !occupiedSeats.includes(seat));
@@ -108,7 +127,7 @@ export class RoomsService {
         room_id: roomId, user_id: userId, role, seat_index: availableSeat || null, is_ready: role === 'PLAYER', joined_at: new Date().toISOString()
       });
       if (error) throw new AppError(500, 'JOIN_FAILED', `Lỗi DB join phòng: ${error.message}`);
-      if (role === 'PLAYER' && room.status === 'RUNNING') await this.syncRunningSessionPlayer(roomId, userId);
+      if (role === 'PLAYER' && room.status === 'RUNNING') return { mode: role, seatIndex: availableSeat || null, activeSessionId: await this.syncRunningSessionPlayer(roomId, userId) };
       return { mode: role, seatIndex: availableSeat || null };
     }
 
@@ -117,11 +136,11 @@ export class RoomsService {
     const legacy = await supabaseAdmin.from('game_rooms').select('id, status, max_players, players:game_room_players(user_id)').eq('id', roomId).single();
     if (legacy.error || !legacy.data) throw new AppError(404, 'ROOM_NOT_FOUND', 'Phòng không tồn tại.');
     const room = legacy.data as any;
-    if ((room.players || []).some((player: any) => player.user_id === userId)) { if (room.status === 'RUNNING') await this.syncRunningSessionPlayer(roomId, userId); return { mode: 'PLAYER', seatIndex: null }; }
-    if ((room.players || []).length >= room.max_players) return { mode: 'SPECTATOR', seatIndex: null };
+    if ((room.players || []).some((player: any) => player.user_id === userId)) { if (room.status === 'RUNNING') return { mode: 'PLAYER', seatIndex: null, activeSessionId: await this.syncRunningSessionPlayer(roomId, userId) }; return { mode: 'PLAYER', seatIndex: null }; }
+    if ((room.players || []).length >= room.max_players) { const { data: activeSession } = await supabaseAdmin.from('game_sessions').select('id').eq('room_id', roomId).eq('status', 'PLAYING').order('started_at', { ascending: false }).limit(1).maybeSingle(); return { mode: 'SPECTATOR', seatIndex: null, activeSessionId: activeSession?.id || null }; }
     const { error } = await supabaseAdmin.from('game_room_players').insert({ room_id: roomId, user_id: userId });
     if (error) throw new AppError(500, 'JOIN_FAILED', `Lỗi DB join phòng: ${error.message}`);
-    if (room.status === 'RUNNING') await this.syncRunningSessionPlayer(roomId, userId);
+    if (room.status === 'RUNNING') return { mode: 'PLAYER', seatIndex: null, activeSessionId: await this.syncRunningSessionPlayer(roomId, userId) };
     return { mode: 'PLAYER', seatIndex: null };
   }
 

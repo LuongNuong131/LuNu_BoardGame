@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useRoomStore } from '@/stores/room.store';
 import { useAuthStore } from '@/stores/auth.store';
@@ -21,6 +21,7 @@ const realtimeStatus = ref('CONNECTING');
 let roomSubscription: RealtimeChannel | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+let roomPollTimer: ReturnType<typeof setInterval> | undefined;
 let roomStarting = false;
 
 const demoRoom = computed(() => DEMO_ROOMS.find((item) => item.id === route.params.id));
@@ -39,6 +40,16 @@ const isFull = computed(() => players.value.length >= (room.value?.max_players |
 const currentUserIsOwner = computed(() => authStore.profile?.id && room.value?.owner_id === authStore.profile.id);
 const canStartAi = computed(() => Boolean(currentUserIsOwner.value && room.value && players.value.length === 1 && ['CHESS', 'CO_TUONG'].includes(room.value.game_id)));
 const canDeleteRoom = computed(() => Boolean(currentUserIsOwner.value || ['ADMIN', 'SUPER_ADMIN'].includes(authStore.profile?.role)));
+
+const routeToActiveSession = async (roomId: string) => {
+  if (String(roomId).startsWith('demo-') || !room.value || room.value.status !== 'RUNNING') return false;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const active: any = await apiClient.get(`/sessions/room/${roomId}/active`);
+    if (active.data?.session?.id) { router.push(`/game/${active.data.session.id}`); return true; }
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+};
 
 const scheduleRoomRefresh = (roomId: string) => {
   if (refreshTimer) clearTimeout(refreshTimer);
@@ -72,9 +83,19 @@ onMounted(async () => {
   if (String(roomId).startsWith('demo-')) return;
   try {
     await roomStore.fetchRoomDetail(roomId);
+    if (await routeToActiveSession(roomId)) return;
     await subscribeToRoom(roomId);
+    roomPollTimer = setInterval(async () => {
+      try { await roomStore.fetchRoomDetail(roomId); await routeToActiveSession(roomId); } catch { /* Realtime/poll retry keeps the room usable during transient network failures. */ }
+    }, 2500);
   } catch {
     router.push('/rooms');
+  }
+});
+
+watch(() => room.value?.status, async (status, previousStatus) => {
+  if (status === 'RUNNING' && previousStatus === 'WAITING') {
+    try { await routeToActiveSession(route.params.id as string); } catch { /* Realtime retry below keeps the room view usable during a short write gap. */ }
   }
 });
 
@@ -83,6 +104,7 @@ onUnmounted(() => {
   if (roomSubscription) supabase.removeChannel(roomSubscription);
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (refreshTimer) clearTimeout(refreshTimer);
+  if (roomPollTimer) clearInterval(roomPollTimer);
 });
 
 const handleStartGame = async (againstAi = false) => {
@@ -110,6 +132,7 @@ const takeSeat = async () => {
   if (!room.value || String(room.value.id).startsWith('demo-')) { router.push(`/game/${room.value?.id || 'demo'}`); return; }
   try {
     const result: any = await roomStore.joinRoom(room.value.id);
+    if (result?.activeSessionId) { router.push(`/game/${result.activeSessionId}`); return; }
     await roomStore.fetchRoomDetail(room.value.id);
     if (room.value.status === 'RUNNING') {
       const active: any = await apiClient.get(`/sessions/room/${room.value.id}/active`);
@@ -129,7 +152,7 @@ const takeSeat = async () => {
       <main>
         <section class="table-shell glass-panel">
           <div class="table-toolbar"><div class="table-label"><span class="table-light"></span><strong>{{ game.name }}</strong><small>· {{ game.players }}</small></div><div class="table-toolbar-actions"><span class="turn-chip"><i class="bi bi-lightning-charge-fill"></i> Bàn cân bằng</span><button class="icon-button"><i class="bi bi-three-dots"></i></button></div></div>
-          <div class="felt-table" :class="game.category"><div class="felt-glow"></div><div class="felt-brand"><span>LuNu</span><small>PLAY WITH INTENT</small></div><div class="table-center-info"><div class="pot-label">{{ game.category === 'cards' ? 'POT HIỆN TẠI' : 'TRẠNG THÁI BÀN' }}</div><strong>{{ game.category === 'cards' ? '2.450 xu' : room.status === 'RUNNING' ? 'ĐANG CHƠI' : 'SẴN SÀNG' }}</strong><small>{{ room.status === 'RUNNING' ? 'Ván #24 · vòng quyết định' : 'Đợi chủ bàn bắt đầu' }}</small></div><div class="table-surface-decoration"><span></span><i class="bi bi-diamond-fill"></i><span></span></div>
+          <div class="felt-table" :class="game.category"><div class="felt-glow"></div><div class="felt-brand"><span>LuNu</span><small>PLAY WITH INTENT</small></div><div class="table-center-info"><div class="pot-label">{{ game.category === 'cards' ? 'POT HIỆN TẠI' : 'TRẠNG THÁI BÀN' }}</div><strong>{{ game.category === 'cards' ? (room.entry_fee ? formatCoins(room.entry_fee) : 'Miễn phí') : room.status === 'RUNNING' ? 'ĐANG CHƠI' : 'SẴN SÀNG' }}</strong><small>{{ room.status === 'RUNNING' ? 'Session realtime · server-authoritative' : 'Đợi chủ bàn bắt đầu' }}</small></div><div class="table-surface-decoration"><span></span><i class="bi bi-diamond-fill"></i><span></span></div>
             <div v-for="(seat, index) in seats" :key="index" class="seat-position" :class="[`seat-${index + 1}`, { empty: !seat, mine: seat?.id === authStore.profile?.id }]">
               <div v-if="seat" class="player-seat"><div class="player-avatar-wrap"><img :src="seat.avatar_url || `https://api.dicebear.com/9.x/shapes/svg?seed=${seat.username || seat.display_name}`" :alt="seat.display_name"><span v-if="seat.isOwner" class="crown"><i class="bi bi-star-fill"></i></span></div><strong>{{ seat.display_name }}</strong><small>{{ seat.isOwner ? 'Chủ bàn' : `Ghế ${index + 1}` }}</small></div>
               <button v-else @click="takeSeat" class="empty-seat"><i class="bi bi-plus-lg"></i><span>Ghế trống</span><small>Chọn chỗ</small></button>

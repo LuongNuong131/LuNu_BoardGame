@@ -24,7 +24,8 @@ export const joinRoom = async (request: FastifyRequest, reply: FastifyReply) => 
     data: {
       message: result.mode === 'PLAYER' ? 'Đã giữ ghế trong phòng.' : 'Phòng đã đủ ghế. Bạn đã vào chế độ khán giả.',
       mode: result.mode,
-      seatIndex: result.seatIndex
+      seatIndex: result.seatIndex,
+      activeSessionId: result.activeSessionId || null
     },
     error: null
   });

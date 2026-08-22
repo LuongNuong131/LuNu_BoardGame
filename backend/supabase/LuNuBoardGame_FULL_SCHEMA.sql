@@ -113,6 +113,17 @@ alter table public.game_sessions add column if not exists started_at timestamptz
 alter table public.game_sessions add column if not exists updated_at timestamptz not null default now();
 
 create index if not exists game_sessions_room_status_idx on public.game_sessions(room_id, status);
+-- Keep only the newest live session if an older installation created duplicates.
+delete from public.game_sessions
+where id in (
+  select id from (
+    select id, row_number() over (partition by room_id order by started_at desc, id desc) as duplicate_rank
+    from public.game_sessions
+    where status = 'PLAYING'
+  ) ranked
+  where duplicate_rank > 1
+);
+create unique index if not exists game_sessions_one_playing_per_room_idx on public.game_sessions(room_id) where status = 'PLAYING';
 
 create table if not exists public.chat_messages (
   id uuid primary key default gen_random_uuid(),

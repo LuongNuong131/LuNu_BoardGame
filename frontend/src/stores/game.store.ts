@@ -13,7 +13,8 @@ export const useGameStore = defineStore('game', {
     activeSessionId: null as string | null,
     channel: null as any,
     refreshTimer: undefined as ReturnType<typeof setTimeout> | undefined,
-    reconnectTimer: undefined as ReturnType<typeof setTimeout> | undefined
+    reconnectTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+    sessionPollTimer: undefined as ReturnType<typeof setInterval> | undefined
   }),
   actions: {
     async fetchGameState(sessionId: string) {
@@ -40,6 +41,8 @@ export const useGameStore = defineStore('game', {
       this.activeSessionId = sessionId;
       if (this.channel) supabase.removeChannel(this.channel as any);
       this.realtimeStatus = 'CONNECTING';
+      if (this.sessionPollTimer) clearInterval(this.sessionPollTimer);
+      this.sessionPollTimer = setInterval(() => this.fetchGameState(sessionId).catch(() => undefined), 2500);
       this.channel = supabase.channel(`game_session_realtime_${sessionId}`)
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'game_sessions', filter: `id=eq.${sessionId}` }, () => this.scheduleRefresh(sessionId))
         .subscribe((status) => {
@@ -56,6 +59,7 @@ export const useGameStore = defineStore('game', {
       if (this.channel) supabase.removeChannel(this.channel as any);
       if (this.refreshTimer) clearTimeout(this.refreshTimer);
       if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+      if (this.sessionPollTimer) clearInterval(this.sessionPollTimer);
       this.channel = null;
       this.activeSessionId = null;
       this.realtimeStatus = 'DISCONNECTED';

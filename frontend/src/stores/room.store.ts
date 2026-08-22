@@ -6,6 +6,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 let lobbyChannel: RealtimeChannel | null = null;
 let lobbyRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 let lobbyReconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let lobbyPollTimer: ReturnType<typeof setInterval> | undefined;
 let lobbyStarting = false;
 
 export const useRoomStore = defineStore('room', {
@@ -38,6 +39,8 @@ export const useRoomStore = defineStore('room', {
       lobbyStarting = true;
       await prepareRealtimeAuth();
       this.realtimeStatus = 'CONNECTING';
+      if (lobbyPollTimer) clearInterval(lobbyPollTimer);
+      lobbyPollTimer = setInterval(() => this.fetchRooms().catch(() => undefined), 5000);
       lobbyChannel = supabase.channel('lobby_realtime')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'game_rooms' }, () => this.scheduleLobbyRefresh())
         .on('postgres_changes', { event: '*', schema: 'public', table: 'game_room_players' }, () => this.scheduleLobbyRefresh())
@@ -61,6 +64,7 @@ export const useRoomStore = defineStore('room', {
       lobbyChannel = null;
       if (lobbyRefreshTimer) clearTimeout(lobbyRefreshTimer);
       if (lobbyReconnectTimer) clearTimeout(lobbyReconnectTimer);
+      if (lobbyPollTimer) clearInterval(lobbyPollTimer);
       this.realtimeStatus = 'DISCONNECTED';
     },
 

@@ -45,7 +45,11 @@ export const startGame = async (request: FastifyRequest, reply: FastifyReply) =>
   const { data: room, error: roomError } = await supabaseAdmin.from('game_rooms').select('*').eq('id', roomId).single();
   if (roomError || !room) throw new AppError(404, 'NOT_FOUND', 'Phòng không tồn tại');
   if (room.owner_id !== userId) throw new AppError(403, 'FORBIDDEN', 'Chỉ chủ phòng mới được bắt đầu game');
-  if (room.status !== 'WAITING') throw new AppError(400, 'BAD_REQUEST', 'Phòng đang chơi rồi.');
+  if (room.status !== 'WAITING') {
+    const { data: activeSession } = await supabaseAdmin.from('game_sessions').select('id, game_id').eq('room_id', roomId).eq('status', 'PLAYING').order('started_at', { ascending: false }).limit(1).maybeSingle();
+    if (activeSession) return reply.send({ success: true, data: { sessionId: activeSession.id, gameId: activeSession.game_id, alreadyStarted: true }, error: null });
+    throw new AppError(400, 'BAD_REQUEST', 'Phòng đang chơi rồi.');
+  }
 
   const requestBody = (request.body || {}) as any;
   const againstAi = Boolean(requestBody.against_ai);
@@ -58,9 +62,14 @@ export const startGame = async (request: FastifyRequest, reply: FastifyReply) =>
   const sessionPlayers = againstAi ? [...players.map((player: any) => player.user_id), `AI_${aiDifficulty}`] : players.map((player: any) => player.user_id);
   const initialState: any = engine.initialize(sessionPlayers, {});
   if (againstAi) initialState.aiDifficulty = aiDifficulty;
-  const { data: session, error: sessionError } = await supabaseAdmin.from('game_sessions')
+  let { data: session, error: sessionError } = await supabaseAdmin.from('game_sessions')
     .insert({ room_id: roomId, game_id: room.game_id, current_state: initialState, status: 'PLAYING' })
     .select().single();
+  if (sessionError?.code === '23505') {
+    const active = await supabaseAdmin.from('game_sessions').select('*').eq('room_id', roomId).eq('status', 'PLAYING').order('started_at', { ascending: false }).limit(1).maybeSingle();
+    session = active.data;
+    sessionError = active.error;
+  }
   if (sessionError || !session) throw new AppError(500, 'DB_ERROR', sessionError?.message || 'Không thể tạo phiên chơi.');
 
   const { error: statusError } = await supabaseAdmin.from('game_rooms').update({ status: 'RUNNING', updated_at: new Date().toISOString() }).eq('id', roomId);
@@ -120,18 +129,27 @@ export const playAction = async (request: FastifyRequest, reply: FastifyReply) =
     aiEvents.push(...aiTurn.events.map((event: any) => ({ ...event, automated: true })));
   }
   events = [...events, ...aiEvents];
+  const safeEvents = events.map((event: any) => ({ type: event.type, playerId: event.playerId, winner: event.winner, target: event.target, amount: event.amount, action: event.action, dice: event.dice, position: event.position, automated: event.automated, at: new Date().toISOString() }));
+  newState.actionLog = [...(session.current_state.actionLog || []), ...safeEvents].slice(-24);
+  newState.revision = Number(session.current_state.revision || 0) + 1;
   let status = 'PLAYING';
   let winner = null;
+  let finished = false;
   if (engine.isFinished(newState)) {
     status = 'FINISHED';
     winner = engine.calculateResult(newState).winner;
-    await supabaseAdmin.from('game_rooms').update({ status: 'WAITING', updated_at: new Date().toISOString() }).eq('id', session.room_id);
+    finished = true;
   }
 
-  const { error: updateError } = await supabaseAdmin.from('game_sessions')
+  const { data: persistedAction, error: updateError } = await supabaseAdmin.from('game_sessions')
     .update({ current_state: newState, status, winner_id: winner, updated_at: new Date().toISOString() })
-    .eq('id', sessionId);
+    .eq('id', sessionId)
+    .eq('updated_at', session.updated_at)
+    .select('id')
+    .maybeSingle();
   if (updateError) throw new AppError(500, 'DB_ERROR', `Không thể lưu nước đi: ${updateError.message}`);
+  if (!persistedAction) throw new AppError(409, 'STALE_SESSION', 'Ván vừa có nước đi mới từ người chơi khác. Bàn sẽ tự đồng bộ lại.');
+  if (finished) await supabaseAdmin.from('game_rooms').update({ status: 'WAITING', updated_at: new Date().toISOString() }).eq('id', session.room_id).eq('status', 'RUNNING');
 
   const publicState = engine.getPublicState(newState, userId);
   return reply.send({ success: true, data: { state: publicState, events }, error: null });

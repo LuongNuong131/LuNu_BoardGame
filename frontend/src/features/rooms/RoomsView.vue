@@ -53,7 +53,8 @@ const roomState = (room: any) => room.status === 'RUNNING' ? 'ĐANG DIỄN RA' :
 const enterRoom = async (room: any) => {
   if (!String(room.id).startsWith('demo-')) {
     try {
-      await roomStore.joinRoom(room.id);
+      const admission: any = await roomStore.joinRoom(room.id);
+      if (admission?.activeSessionId) { router.push(`/game/${admission.activeSessionId}`); return; }
     } catch (err: any) { uiStore.error(err.message || 'Không thể vào phòng.'); return; }
   }
   router.push(`/room/${room.id}`);
@@ -98,7 +99,7 @@ const handleCreate = async () => {
             <div class="room-card-top"><div class="game-token" :style="{ color: GAME_BY_ID[room.game_id]?.accent, background: `${GAME_BY_ID[room.game_id]?.accent}16` }"><i :class="`bi ${GAME_BY_ID[room.game_id]?.icon || 'bi-controller'}`"></i></div><div class="room-status" :class="room.status === 'RUNNING' ? 'running' : isRoomFull(room) ? 'full' : 'open'"><span></span>{{ roomState(room) }}</div><button v-if="canDeleteRoom(room)" class="more-button delete-room-button" title="Xóa phòng" @click.stop="removeRoom(room)"><i class="bi bi-trash3"></i></button></div>
             <div class="room-card-body"><div class="room-game-label">{{ GAME_BY_ID[room.game_id]?.name || room.game_id }} <span>·</span> {{ GAME_BY_ID[room.game_id]?.players || 'Bàn mở' }}</div><h3>{{ room.name }}</h3><p>{{ GAME_BY_ID[room.game_id]?.description || 'Bàn chơi đang chờ những người đồng điệu.' }}</p></div>
             <div class="room-card-bottom"><div class="room-owner"><span class="owner-avatar">{{ (room.ownerName || room.owner?.display_name || 'L').charAt(0) }}</span><span><small>Chủ bàn</small><strong>{{ room.ownerName || room.owner?.display_name || 'Người chơi' }}</strong></span></div><div class="room-economy"><strong>{{ room.entry_fee ? formatCoins(room.entry_fee) : 'Miễn phí' }}</strong><small>phí vào bàn</small></div></div>
-            <div class="room-card-footer"><div class="seat-meter"><div class="seat-label"><span><i class="bi bi-person-fill me-1"></i>{{ occupiedCount(room) }}/{{ room.max_players }} chỗ ngồi</span><span class="watch-label"><i class="bi bi-eye me-1"></i>{{ spectatorCount(room) }} xem</span></div><div class="seat-track"><span :style="{ width: `${Math.min(100, occupiedCount(room) / room.max_players * 100)}%` }"></span></div></div><button @click="enterRoom(room)" class="btn btn-sm room-enter-btn">{{ isRoomFull(room) || room.status === 'RUNNING' ? 'Xem bàn' : 'Vào bàn' }}<i class="bi bi-arrow-up-right ms-2"></i></button></div>
+            <div class="room-card-footer"><div class="seat-meter"><div class="seat-label"><span><i class="bi bi-person-fill me-1"></i>{{ occupiedCount(room) }}/{{ room.max_players }} chỗ ngồi</span><span class="watch-label"><i class="bi bi-eye me-1"></i>{{ spectatorCount(room) }} xem</span></div><div class="seat-track"><span :style="{ width: `${Math.min(100, occupiedCount(room) / room.max_players * 100)}%` }"></span></div></div><button @click="enterRoom(room)" class="btn btn-sm room-enter-btn">{{ room.status === 'RUNNING' ? (isRoomFull(room) ? 'Theo dõi' : 'Vào trận') : isRoomFull(room) ? 'Xem bàn' : 'Vào bàn' }}<i class="bi bi-arrow-up-right ms-2"></i></button></div>
           </article>
         </div>
       </main>
