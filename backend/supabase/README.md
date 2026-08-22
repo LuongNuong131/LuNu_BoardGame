@@ -20,6 +20,16 @@ Khi upload thành công, backend cập nhật `profiles.avatar_url` và `profile
 
 Backend phải nhận `SUPABASE_URL` và `SUPABASE_SERVICE_ROLE_KEY` qua environment. Browser chỉ nhận `VITE_SUPABASE_URL` và `VITE_SUPABASE_ANON_KEY`. Không commit secret nào.
 
+Nếu chạy bằng npm trên Windows, luôn cài dependency trước khi chạy dev:
+
+```bash
+cd backend
+npm install
+npm run dev
+```
+
+`@fastify/multipart` là dependency phục vụ upload avatar. Backend hiện load dependency này theo kiểu optional để login, room và game API vẫn khởi động được khi `node_modules` chưa đồng bộ; chỉ riêng endpoint avatar sẽ trả `503 MULTIPART_UNAVAILABLE` cho tới khi chạy `npm install`.
+
 Các endpoint profile là `PATCH /api/auth/profile` và `POST /api/auth/profile/avatar` (multipart field `avatar`). Room owner/admin có thể gọi `DELETE /api/rooms/:id`. Admin có thể xóa user bằng `DELETE /api/admin/users/:id`; self-delete và xóa `SUPER_ADMIN` bị chặn.
 
 Nếu database cũ chưa chạy migration seating, room service vẫn có fallback tạm thời. Tuy nhiên để loại bỏ hoàn toàn lỗi `record "existing_record" has no field "id"`, bắt buộc chạy lại SQL bundle để thay function `join_room` bằng bản dùng `EXISTS`.

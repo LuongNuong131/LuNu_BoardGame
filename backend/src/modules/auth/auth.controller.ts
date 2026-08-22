@@ -26,7 +26,9 @@ export const updateProfile = async (request: FastifyRequest, reply: FastifyReply
 };
 
 export const uploadAvatar = async (request: FastifyRequest, reply: FastifyReply) => {
-  const file = await request.file();
+  const multipartRequest = request as FastifyRequest & { file?: () => Promise<any> };
+  if (typeof multipartRequest.file !== 'function') throw new AppError(503, 'MULTIPART_UNAVAILABLE', 'Avatar upload đang tạm tắt. Hãy cài dependency @fastify/multipart rồi khởi động lại backend.');
+  const file = await multipartRequest.file();
   if (!file) throw new AppError(400, 'FILE_REQUIRED', 'Vui lòng chọn một ảnh đại diện.');
   if (!file.mimetype.startsWith('image/')) throw new AppError(400, 'INVALID_FILE', 'Chỉ chấp nhận file hình ảnh.');
 
