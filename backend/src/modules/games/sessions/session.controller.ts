@@ -26,10 +26,11 @@ const getSessionParticipants = async (roomId: string, state: any) => {
   const ids = (seats || []).map((seat: any) => seat.user_id).filter(Boolean);
   const { data: profiles } = ids.length ? await supabaseAdmin.from('profiles').select('id, username, display_name, avatar_url').in('id', ids) : { data: [] as any[] };
   const byId = new Map((profiles || []).map((profile: any) => [profile.id, profile]));
-  const participants = (state.players || []).map((id: string, index: number) => {
+  const statePlayers = (state.players || []).map((entry: any) => typeof entry === 'string' ? { id: entry, seat: undefined } : { id: entry.playerId, seat: entry.seat });
+  const participants = statePlayers.map(({ id, seat: stateSeat }: any, index: number) => {
     const seat = (seats || []).find((item: any) => item.user_id === id);
     const profile = byId.get(id);
-    return profile ? { ...profile, role: seat?.role || 'PLAYER', seat_index: seat?.seat_index || index + 1 } : { id, username: id.toLowerCase().startsWith('ai_') ? id : 'player', display_name: id.toLowerCase().startsWith('ai_') ? `Máy · ${id.replace('AI_', '')}` : 'Người chơi', avatar_url: null, role: 'PLAYER', seat_index: index + 1, is_ai: id.toLowerCase().startsWith('ai_') };
+    return profile ? { ...profile, role: seat?.role || 'PLAYER', seat_index: seat?.seat_index || stateSeat || index + 1 } : { id, username: id.toLowerCase().startsWith('ai_') ? id : 'player', display_name: id.toLowerCase().startsWith('ai_') ? `Máy · ${id.replace('AI_', '')}` : 'Người chơi', avatar_url: null, role: 'PLAYER', seat_index: index + 1, is_ai: id.toLowerCase().startsWith('ai_') };
   });
   return participants;
 };
@@ -119,7 +120,8 @@ export const playAction = async (request: FastifyRequest, reply: FastifyReply) =
   let { newState, events } = engine.applyAction(session.current_state, action, userId);
   const aiEvents: any[] = [];
   for (let turn = 0; turn < 3; turn += 1) {
-    const currentPlayer = newState.players?.[newState.currentTurnIndex];
+    const currentEntry = newState.players?.[newState.currentTurnIndex];
+    const currentPlayer = typeof currentEntry === 'string' ? currentEntry : currentEntry?.playerId;
     if (!currentPlayer?.startsWith('AI_') || typeof (engine as any).getAiAction !== 'function') break;
     const aiDifficulty = newState.aiDifficulty || 'MEDIUM';
     const aiAction = (engine as any).getAiAction(newState, currentPlayer, aiDifficulty);
@@ -137,7 +139,8 @@ export const playAction = async (request: FastifyRequest, reply: FastifyReply) =
   let finished = false;
   if (engine.isFinished(newState)) {
     status = 'FINISHED';
-    winner = engine.calculateResult(newState).winner;
+    const result = engine.calculateResult(newState) as any;
+    winner = result.winner || result.winnerPlayerId || result.winnerTeam || null;
     finished = true;
   }
 

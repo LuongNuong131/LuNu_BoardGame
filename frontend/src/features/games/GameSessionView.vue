@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useGameStore } from '@/stores/game.store';
 import { GAME_BY_ID } from '@/data/games';
 import { useAuthStore } from '@/stores/auth.store';
+import WerewolfArena from './WerewolfArena.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -90,6 +91,10 @@ const drawCard = async () => {
   if (!isDemo.value) { try { await gameStore.playAction(sessionId.value, { type: 'DRAW_CARD' }); } catch { actionMessage.value = 'Nước đi chưa hợp lệ'; } return; }
   demoHand.value.push({ rank: '5', suit: '♦', tone: 'red' }); actionMessage.value = 'Bạn đã rút 1 lá · lượt vẫn được giữ';
 };
+const sendWerewolfAction = async (action: any) => {
+  if (isDemo.value) { actionMessage.value = 'Hành động Ma Sói demo đã được ghi nhận'; return; }
+  try { await gameStore.playAction(sessionId.value, action); actionMessage.value = 'Hành động đã được ghi nhận · máy chủ đang phân giải'; } catch (error: any) { actionMessage.value = error.message || 'Hành động chưa hợp lệ'; }
+};
 const sendTableAction = async (type: string, payload: any = {}) => {
   if (isDemo.value) { actionMessage.value = type === 'ROLL_DICE' ? 'Bạn vừa tung xúc xắc · lượt demo đã cập nhật' : 'Hành động demo đã được ghi nhận'; return; }
   try { await gameStore.playAction(sessionId.value, { type, payload }); actionMessage.value = 'Nước đi đã được ghi nhận · bàn đang đồng bộ'; } catch (error: any) { actionMessage.value = error.message || 'Nước đi chưa hợp lệ'; }
@@ -103,7 +108,8 @@ const playCard = async () => {
 </script>
 
 <template>
-  <div class="arena-page">
+  <WerewolfArena v-if="isWerewolf" :state="currentState" :participants="participants" :is-player="isPlayer" :my-player-id="authStore.profile?.id" :is-demo="isDemo" @action="sendWerewolfAction" />
+  <div v-else class="arena-page">
     <header class="arena-header"><div class="arena-brand"><button @click="router.push('/rooms')" class="back-button"><i class="bi bi-arrow-left"></i></button><div class="brand-glyph-small"><i class="bi bi-diamond-half"></i></div><div><strong>LuNu Arena</strong><small>{{ activeGame.name }} · {{ isDemo ? 'Bàn mẫu' : `Session ${sessionId.slice(0, 8)}` }}</small></div></div><div class="arena-center-status"><span class="live-dot"></span><strong>Trực tiếp</strong><span v-if="!isPlayer" class="spectator-badge"><i class="bi bi-eye me-1"></i>Khán giả</span><span>{{ roundLabel }}</span><span class="status-divider"></span><span>{{ elapsedLabel }}</span></div><div class="arena-actions"><button class="arena-icon"><i class="bi bi-volume-up"></i></button><button class="arena-icon" @click="showRules = !showRules"><i class="bi bi-journal-text"></i></button><button class="leave-arena" @click="router.push('/rooms')">Rời bàn</button></div></header>
     <div class="arena-layout">
       <main class="arena-board-wrap"><div class="arena-table" :class="activeGame.category"><div class="arena-table-inner"><div class="table-ring"></div><div v-for="(participant, index) in participants.filter((item: any) => item.id !== authStore.profile?.id).slice(0, 3)" :key="participant.id" class="opponent" :class="`opponent-${index === 0 ? 'top' : index === 1 ? 'left' : 'right'}`"><div class="opponent-avatar">{{ (participant.display_name || participant.username || 'P').slice(0, 1).toUpperCase() }}</div><div><strong>{{ participant.display_name || participant.username }}</strong><small><span v-if="participant.is_ai" class="mini-live"></span>{{ participant.is_ai ? 'Trợ lý AI' : `Ghế ${participant.seat_index || index + 1}` }}</small></div><span class="opponent-count">{{ currentState?.playerCardCounts?.[participant.id] || 0 }} <small>lá</small></span></div><div class="board-center">

@@ -1,6 +1,7 @@
 import { CatalogGameEngine } from './CatalogGameEngine';
+import { WerewolfEngine as ServerWerewolfEngine } from '../werewolf/WerewolfEngine';
 
-export class WerewolfEngine extends CatalogGameEngine { constructor() { super('WEREWOLF'); } }
+export { ServerWerewolfEngine as WerewolfEngine };
 export class TienLenEngine extends CatalogGameEngine { constructor() { super('TIEN_LEN'); } }
 export class BlackjackEngine extends CatalogGameEngine { constructor() { super('BLACKJACK'); } }
 export class PhomEngine extends CatalogGameEngine { constructor() { super('PHOM'); } }
