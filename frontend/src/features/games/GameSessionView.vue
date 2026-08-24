@@ -5,6 +5,7 @@ import { useGameStore } from '@/stores/game.store';
 import { GAME_BY_ID } from '@/data/games';
 import { useAuthStore } from '@/stores/auth.store';
 import WerewolfArena from './WerewolfArena.vue';
+import TienLenArena from './TienLenArena.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -91,6 +92,10 @@ const drawCard = async () => {
   if (!isDemo.value) { try { await gameStore.playAction(sessionId.value, { type: 'DRAW_CARD' }); } catch { actionMessage.value = 'Nước đi chưa hợp lệ'; } return; }
   demoHand.value.push({ rank: '5', suit: '♦', tone: 'red' }); actionMessage.value = 'Bạn đã rút 1 lá · lượt vẫn được giữ';
 };
+const sendTienLenAction = async (action: any) => {
+  if (isDemo.value) { actionMessage.value = 'Hành động Tiến Lên demo đã được ghi nhận'; return; }
+  try { await gameStore.playAction(sessionId.value, action); actionMessage.value = 'Nước đi đã được ghi nhận · máy chủ đang kiểm tra luật'; } catch (error: any) { actionMessage.value = error.message || 'Nước đi chưa hợp lệ'; }
+};
 const sendWerewolfAction = async (action: any) => {
   if (isDemo.value) { actionMessage.value = 'Hành động Ma Sói demo đã được ghi nhận'; return; }
   try { await gameStore.playAction(sessionId.value, action); actionMessage.value = 'Hành động đã được ghi nhận · máy chủ đang phân giải'; } catch (error: any) { actionMessage.value = error.message || 'Hành động chưa hợp lệ'; }
@@ -108,7 +113,8 @@ const playCard = async () => {
 </script>
 
 <template>
-  <WerewolfArena v-if="isWerewolf" :state="currentState" :participants="participants" :is-player="isPlayer" :my-player-id="authStore.profile?.id" :is-demo="isDemo" @action="sendWerewolfAction" />
+  <TienLenArena v-if="isTienLen" :state="currentState" :participants="participants" :is-player="isPlayer" :my-player-id="authStore.profile?.id" :is-demo="isDemo" @action="sendTienLenAction" />
+  <WerewolfArena v-else-if="isWerewolf" :state="currentState" :participants="participants" :is-player="isPlayer" :my-player-id="authStore.profile?.id" :is-demo="isDemo" @action="sendWerewolfAction" />
   <div v-else class="arena-page">
     <header class="arena-header"><div class="arena-brand"><button @click="router.push('/rooms')" class="back-button"><i class="bi bi-arrow-left"></i></button><div class="brand-glyph-small"><i class="bi bi-diamond-half"></i></div><div><strong>LuNu Arena</strong><small>{{ activeGame.name }} · {{ isDemo ? 'Bàn mẫu' : `Session ${sessionId.slice(0, 8)}` }}</small></div></div><div class="arena-center-status"><span class="live-dot"></span><strong>Trực tiếp</strong><span v-if="!isPlayer" class="spectator-badge"><i class="bi bi-eye me-1"></i>Khán giả</span><span>{{ roundLabel }}</span><span class="status-divider"></span><span>{{ elapsedLabel }}</span></div><div class="arena-actions"><button class="arena-icon"><i class="bi bi-volume-up"></i></button><button class="arena-icon" @click="showRules = !showRules"><i class="bi bi-journal-text"></i></button><button class="leave-arena" @click="router.push('/rooms')">Rời bàn</button></div></header>
     <div class="arena-layout">
