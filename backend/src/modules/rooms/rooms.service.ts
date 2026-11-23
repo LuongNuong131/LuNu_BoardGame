@@ -1,6 +1,5 @@
 import { supabaseAdmin } from '../../infrastructure/supabase/client';
 import { AppError } from '../../shared/errors/AppError';
-import { gameRegistry } from '../games/core/GameRegistry';
 
 const isSeatingSchemaError = (error: any) => {
   const message = String(error?.message || '').toLowerCase();
@@ -71,21 +70,19 @@ export class RoomsService {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const { data: session } = await supabaseAdmin.from('game_sessions').select('id, game_id, current_state, updated_at').eq('room_id', roomId).eq('status', 'PLAYING').order('started_at', { ascending: false }).limit(1).maybeSingle();
       if (!session) return null;
-      if (session.current_state?.players?.includes(userId)) return session.id;
-      const engine = gameRegistry.getEngine(session.game_id) as any;
-      if (typeof engine.addPlayer !== 'function') throw new AppError(409, 'SESSION_ADMISSION_UNSUPPORTED', 'Engine hiện tại chưa hỗ trợ nhận người chơi mới trong ván đang diễn ra.');
-      let nextState = engine.addPlayer(session.current_state, userId);
-      const aiId = session.current_state.players?.find((player: string) => player.startsWith('AI_'));
-      if (aiId) {
-        const aiIndex = session.current_state.players.indexOf(aiId);
-        const admittedHand = nextState.hands[userId];
-        nextState.players = session.current_state.players.map((player: string, index: number) => index === aiIndex ? userId : player);
-        nextState.hands[userId] = admittedHand;
-        delete nextState.hands[aiId]; delete nextState.scores[aiId]; delete nextState.bets[aiId]; delete nextState.folded[aiId]; delete nextState.done[aiId]; delete nextState.positions[aiId];
-        if (nextState.roles) { nextState.roles[userId] = nextState.roles[aiId] || 'VILLAGER'; delete nextState.roles[aiId]; }
-        if (nextState.votes) { Object.entries(nextState.votes).forEach(([voter, target]) => { if (voter === aiId) delete nextState.votes[voter]; else if (target === aiId) nextState.votes[voter] = userId; }); }
+      const players = session.current_state?.players || [];
+      if (players.includes(userId) || !['CHESS', 'CO_TUONG'].includes(session.game_id)) return session.id;
+      const aiId = players.find((player: unknown) => typeof player === 'string' && player.startsWith('AI_'));
+      if (!aiId) return session.id;
+      const nextState = structuredClone(session.current_state);
+      nextState.players = players.map((player: string) => player === aiId ? userId : player);
+      for (const field of ['hands', 'scores', 'bets', 'folded', 'done', 'positions', 'hasDrawn', 'pendingExplosion']) {
+        if (!nextState[field] || !(aiId in nextState[field])) continue;
+        nextState[field][userId] = nextState[field][aiId];
+        delete nextState[field][aiId];
       }
-      const { data: persisted, error: updateError } = await supabaseAdmin.from('game_sessions').update({ current_state: nextState, updated_at: new Date().toISOString() }).eq('id', session.id).eq('updated_at', session.updated_at).select('id').maybeSingle();
+      nextState.revision = Number(nextState.revision || 0) + 1;
+      const { data: persisted, error: updateError } = await supabaseAdmin.from('game_sessions').update({ current_state: nextState, updated_at: new Date(Math.max(Date.now(), Date.parse(session.updated_at) + 1)).toISOString() }).eq('id', session.id).eq('updated_at', session.updated_at).eq('status', 'PLAYING').select('id').maybeSingle();
       if (updateError) throw new AppError(500, 'SESSION_ADMISSION_FAILED', `Không thể đồng bộ ghế vào phiên chơi: ${updateError.message}`);
       if (persisted) return session.id;
       await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)));

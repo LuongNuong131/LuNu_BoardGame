@@ -15,7 +15,7 @@ const showCreateModal = ref(false);
 const searchTerm = ref('');
 const activeTab = ref<'all' | GameCategory>('all');
 const selectedGame = ref('all');
-const createForm = ref({ game_id: 'WEREWOLF', name: 'Phòng của LuNu', max_players: 12, entry_fee: 150 });
+const createForm = ref({ game_id: 'WEREWOLF', name: 'Phòng của LuNu', max_players: 12, entry_fee: 0 });
 const loadError = ref('');
 
 const rooms = computed(() => roomStore.rooms.length ? roomStore.rooms : import.meta.env.VITE_DEMO_MODE === 'true' ? DEMO_ROOMS : []);
@@ -41,7 +41,7 @@ const updateGameDefaults = () => {
   const game = selectedDefinition.value;
   if (game) {
     createForm.value.max_players = game.maxPlayers;
-    createForm.value.entry_fee = game.id === 'WEREWOLF' ? 150 : game.id === 'POKER' ? 500 : 50;
+    createForm.value.entry_fee = 0;
   }
 };
 
@@ -106,11 +106,11 @@ const handleCreate = async () => {
 
       <aside class="side-rail">
         <section class="rail-card glass-panel"><div class="rail-title"><div><div class="eyebrow">Luật bàn</div><h2>Không còn chỗ?</h2></div><i class="bi bi-eye text-mint"></i></div><p>Khi đủ người, bạn vẫn có thể <strong>vào xem trực tiếp</strong>. Khi có ghế trống, hệ thống ưu tiên người đã chờ lâu nhất.</p><div class="policy-row"><span class="policy-icon"><i class="bi bi-shield-check"></i></span><span><strong>Minh bạch</strong><small>Ghế và phí hiển thị theo thời gian thực</small></span></div><div class="policy-row"><span class="policy-icon"><i class="bi bi-arrow-repeat"></i></span><span><strong>Luân phiên</strong><small>Rời bàn sẽ mở ghế cho người xem</small></span></div></section>
-        <section class="guide-card"><div class="eyebrow">Cẩm nang nhanh</div><h2>Chơi đúng luật,<br><span>vui đúng gu.</span></h2><p>Mỗi loại game có luật tiền, nhịp chơi và hướng dẫn riêng ngay trong phòng.</p><router-link to="/room/demo-werewolf" class="guide-link">Xem một phòng mẫu <i class="bi bi-arrow-up-right"></i></router-link></section>
+        <section class="guide-card"><div class="eyebrow">Cẩm nang nhanh</div><h2>Chơi đúng luật,<br><span>vui đúng gu.</span></h2><p>Mỗi loại game có luật tiền, nhịp chơi và hướng dẫn riêng ngay trong phòng.</p><router-link to="/practice" class="guide-link">Sảnh luyện tập</router-link></section>
       </aside>
     </div>
 
-    <div v-if="showCreateModal" class="modal-backdrop-custom" @click.self="showCreateModal = false"><div class="create-modal glass-panel"><div class="modal-header-custom"><div><div class="eyebrow">New table</div><h2>Tạo phòng chơi</h2><p>Thiết lập một bàn riêng cho nhóm của bạn.</p></div><button class="close-button" @click="showCreateModal = false"><i class="bi bi-x-lg"></i></button></div><form @submit.prevent="handleCreate"><label>Chọn game<select v-model="createForm.game_id" class="form-select mt-2" @change="updateGameDefaults"><option v-for="game in GAME_CATALOG" :key="game.id" :value="game.id">{{ game.name }} · {{ game.players }}</option></select></label><div class="selected-game-note mt-3"><div class="game-token" :style="{color:selectedDefinition?.accent, background:`${selectedDefinition?.accent}16`}"><i :class="`bi ${selectedDefinition?.icon}`"></i></div><div><strong>{{ selectedDefinition?.name }}</strong><small>{{ selectedDefinition?.description }}</small></div></div><label class="mt-3">Tên phòng<input v-model="createForm.name" class="form-control mt-2" required></label><div class="row g-3 mt-0"><label class="col-6 mt-3">Số ghế<input v-model.number="createForm.max_players" type="number" :min="selectedDefinition?.minPlayers" :max="selectedDefinition?.maxPlayers" class="form-control mt-2" required></label><label class="col-6 mt-3">Phí vào bàn<input v-model.number="createForm.entry_fee" type="number" min="0" class="form-control mt-2" required></label></div><div class="rule-note mt-4"><i class="bi bi-info-circle"></i><span>Phòng đầy sẽ chuyển người vào sau sang <strong>chế độ khán giả</strong>. Ghế trống được mở lại tự động khi có người rời bàn.</span></div><div class="modal-actions mt-4"><button type="button" class="btn btn-quiet" @click="showCreateModal = false">Hủy</button><button type="submit" class="btn btn-gold">Tạo phòng <i class="bi bi-arrow-right ms-2"></i></button></div></form></div></div>
+    <div v-if="showCreateModal" class="modal-backdrop-custom" @click.self="showCreateModal = false"><div class="create-modal glass-panel"><div class="modal-header-custom"><div><div class="eyebrow">New table</div><h2>Tạo phòng chơi</h2><p>Thiết lập một bàn riêng cho nhóm của bạn.</p></div><button class="close-button" @click="showCreateModal = false"><i class="bi bi-x-lg"></i></button></div><form @submit.prevent="handleCreate"><label>Chọn game<select v-model="createForm.game_id" class="form-select mt-2" @change="updateGameDefaults"><option v-for="game in GAME_CATALOG" :key="game.id" :value="game.id">{{ game.name }} · {{ game.players }}</option></select></label><div class="selected-game-note mt-3"><div class="game-token" :style="{color:selectedDefinition?.accent, background:`${selectedDefinition?.accent}16`}"><i :class="`bi ${selectedDefinition?.icon}`"></i></div><div><strong>{{ selectedDefinition?.name }}</strong><small>{{ selectedDefinition?.description }}</small></div></div><label class="mt-3">Tên phòng<input v-model="createForm.name" class="form-control mt-2" maxlength="80" required></label><div class="row g-3 mt-0"><label class="col-6 mt-3">Số ghế<input v-model.number="createForm.max_players" type="number" :min="selectedDefinition?.minPlayers" :max="selectedDefinition?.maxPlayers" class="form-control mt-2" required></label><label class="col-6 mt-3">Phí vào bàn<input v-model.number="createForm.entry_fee" type="number" min="0" max="1000000" class="form-control mt-2" required></label></div><div class="rule-note mt-4"><i class="bi bi-info-circle"></i><span>Phòng đầy sẽ chuyển người vào sau sang <strong>chế độ khán giả</strong>. Ghế trống được mở lại tự động khi có người rời bàn.</span></div><div class="modal-actions mt-4"><button type="button" class="btn btn-quiet" @click="showCreateModal = false">Hủy</button><button type="submit" class="btn btn-gold">Tạo phòng <i class="bi bi-arrow-right ms-2"></i></button></div></form></div></div>
   </div>
 </template>
 

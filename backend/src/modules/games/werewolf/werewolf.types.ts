@@ -14,6 +14,7 @@ export type WerewolfRoleId = 'werewolf' | 'villager' | 'seer' | 'witch' | 'guard
 export type WerewolfTeam = 'WEREWOLF' | 'VILLAGE';
 export type TiePolicy = 'NO_EXECUTION' | 'RANDOM_EXECUTION' | 'REVOTE';
 export type WerewolfActionType =
+  | 'SKIP_NIGHT'
   | 'WEREWOLF_KILL'
   | 'SEER_CHECK'
   | 'GUARD_PROTECT'
@@ -48,6 +49,7 @@ export interface WerewolfPlayerState {
   lastGuardTarget?: string;
   loverId?: string;
   usedAbilities: string[];
+  seen?: Record<string, WerewolfTeam>;
 }
 
 export interface PendingNightAction {
@@ -91,6 +93,9 @@ export interface WerewolfGameState {
   winnerPlayers?: string[];
   randomSeed: number;
   sequence: number;
+  rules?: WerewolfRuleset;
+  pendingVictim?: string;
+  revoteDay?: number;
 }
 
 export interface WerewolfResult {
@@ -112,7 +117,7 @@ export interface WerewolfAction {
 
 export const CLASSIC_10_RULESET: WerewolfRuleset = {
   minPlayers: 6,
-  maxPlayers: 20,
+  maxPlayers: 18,
   roles: ['werewolf', 'werewolf', 'werewolf', 'seer', 'witch', 'guard', 'hunter', 'villager', 'villager', 'villager'],
   nightDurationSeconds: 60,
   discussionDurationSeconds: 180,
@@ -126,7 +131,7 @@ export const CLASSIC_10_RULESET: WerewolfRuleset = {
 };
 
 export function rulesetForPlayerCount(playerCount: number): WerewolfRuleset {
-  if (playerCount < 6 || playerCount > 20) throw new Error('Werewolf supports 6–20 players.');
+  if (playerCount < 6 || playerCount > 18) throw new Error('Werewolf supports 6–18 players.');
   const wolves = Math.max(2, Math.floor(playerCount / 4));
   const roles: WerewolfRoleId[] = Array.from({ length: wolves }, () => 'werewolf');
   roles.push('seer', 'witch', 'guard', 'hunter');
@@ -139,5 +144,5 @@ export function roleTeam(roleId: WerewolfRoleId): WerewolfTeam {
 }
 
 export function roleName(roleId: WerewolfRoleId): string {
-  return ({ werewolf: 'Werewolf', villager: 'Villager', seer: 'Seer', witch: 'Witch', guard: 'Guard', hunter: 'Hunter' } as const)[roleId];
+  return ({ werewolf: 'Ma Sói', villager: 'Dân làng', seer: 'Tiên tri', witch: 'Phù thủy', guard: 'Bảo vệ', hunter: 'Thợ săn' } as const)[roleId];
 }

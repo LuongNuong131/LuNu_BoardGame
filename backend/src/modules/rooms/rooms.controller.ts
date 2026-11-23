@@ -9,9 +9,13 @@ export const getRooms = async (_request: FastifyRequest, reply: FastifyReply) =>
 
 export const createRoom = async (request: FastifyRequest, reply: FastifyReply) => {
   const userId = request.user!.id;
-  const { game_id, name, max_players, entry_fee } = request.body as any;
-  if (!game_id || !name || !max_players) throw new AppError(400, 'VALIDATION_ERROR', 'Vui lòng nhập đủ thông tin tạo phòng.');
-  const room = await roomsService.createRoom(userId, game_id, name, parseInt(max_players), parseInt(entry_fee) || 0);
+  const { game_id, name, max_players, entry_fee = 0 } = (request.body || {}) as Record<string, unknown>;
+  if (typeof game_id !== 'string' || typeof name !== 'string' || !name.trim() || name.trim().length > 80 ||
+      typeof max_players !== 'number' || !Number.isSafeInteger(max_players) ||
+      typeof entry_fee !== 'number' || !Number.isSafeInteger(entry_fee) || entry_fee < 0 || entry_fee > 1000000) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'Tên phòng tối đa 80 ký tự. Số ghế và mức phí phải là số nguyên hợp lệ.');
+  }
+  const room = await roomsService.createRoom(userId, game_id, name.trim(), max_players, entry_fee);
   return reply.send({ success: true, data: room, error: null });
 };
 

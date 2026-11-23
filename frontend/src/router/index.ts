@@ -9,6 +9,7 @@ const routes: Array<RouteRecordRaw> = [
   { path: '/profile', name: 'Profile', component: () => import('@/features/profile/ProfileView.vue'), meta: { requiresAuth: true } },
   { path: '/rooms', name: 'RoomsLobby', component: () => import('@/features/rooms/RoomsView.vue'), meta: { requiresAuth: true } },
   { path: '/room/:id', name: 'RoomDetail', component: () => import('@/features/rooms/RoomDetailView.vue'), meta: { requiresAuth: true } },
+  { path: '/practice', name: 'PracticeLobby', component: () => import('@/features/games/PracticeLobby.vue') },
   { path: '/game/:sessionId', name: 'GameArena', component: () => import('@/features/games/GameSessionView.vue'), meta: { requiresAuth: true } }
 ];
 
@@ -20,7 +21,7 @@ router.beforeEach(async (to, _from, next) => {
 
   const isAuth = authStore.isAuthenticated;
   const role = authStore.profile?.role;
-  if (to.meta.requiresAuth && !isAuth) next({ name: 'Login' });
+  if (to.meta.requiresAuth && !isAuth && !(to.name === 'GameArena' && String(to.params.sessionId).startsWith('demo-'))) next({ name: 'Login' });
   else if (to.meta.requiresGuest && isAuth) next({ name: 'Home' });
   else if (to.meta.requiresAdmin && role !== 'SUPER_ADMIN' && role !== 'ADMIN') next({ name: 'Home' });
   else next();

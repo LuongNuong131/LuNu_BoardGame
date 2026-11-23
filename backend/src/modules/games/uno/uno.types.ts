@@ -16,8 +16,9 @@ export interface UnoState {
   direction: 1 | -1; // Chiều đánh (1: xuôi, -1: ngược)
   currentColor: UnoColor; // Màu hiện tại đang đánh
   winner: string | null;
+  drawnCardId?: string;
 }
 
 export type UnoAction = 
-  | { type: 'PLAY_CARD'; payload: { cardId: string; chosenColor?: UnoColor } }
-  | { type: 'DRAW_CARD'; payload: {} };
+  | { type: 'PLAY_CARD'; payload: { cardId: string; chosenColor?: UnoColor; sayUno?: boolean } }
+  | { type: 'DRAW_CARD' | 'PASS'; payload?: Record<string, never> };

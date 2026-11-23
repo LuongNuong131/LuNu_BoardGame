@@ -116,6 +116,7 @@ export class AdminService {
     const allowed = ['WAITING', 'RUNNING', 'FINISHED', 'CANCELLED'];
     if (!allowed.includes(status)) throw new AppError(400, 'VALIDATION_ERROR', 'Trạng thái phòng không hợp lệ.');
     const { data, error } = await supabaseAdmin.from('game_rooms').update({ status }).eq('id', roomId).select('id, status').single();
+    if (error?.message === 'lunu_no_active_session') throw new AppError(409, 'INVALID_ROOM_STATE', 'Hãy bắt đầu ván từ trong phòng trước.');
     if (error || !data) throw new AppError(500, 'UPDATE_FAILED', error?.message || 'Không thể cập nhật trạng thái phòng.');
     return data;
   }

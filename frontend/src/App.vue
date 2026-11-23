@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
+import { computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 import { useWalletStore } from './stores/wallet.store';
@@ -11,14 +11,14 @@ const router = useRouter();
 const authStore = useAuthStore();
 const walletStore = useWalletStore();
 
-const isGuestRoute = computed(() => route.name === 'Login');
+const isGuestRoute = computed(() => ['Login', 'PracticeLobby', 'GameArena'].includes(String(route.name)));
 const displayName = computed(() => authStore.profile?.display_name || 'Khách quý');
 const username = computed(() => authStore.profile?.username || 'guest');
 const avatar = computed(() => authStore.profile?.avatar_url || `https://api.dicebear.com/9.x/shapes/svg?seed=${username.value}&backgroundColor=193a31`);
 
-onMounted(() => {
-  if (!isGuestRoute.value && authStore.isAuthenticated) walletStore.fetchBalance();
-});
+watch([isGuestRoute, () => authStore.isAuthenticated], ([standalone, signedIn]) => {
+  if (!standalone && signedIn) void walletStore.fetchBalance();
+}, { immediate: true });
 
 const logout = async () => {
   await authStore.logout();
@@ -45,22 +45,14 @@ const logout = async () => {
         <div class="sidebar-label">Không gian chơi</div>
         <nav class="sidebar-nav">
           <router-link to="/" class="sidebar-link" exact-active-class="active"><i class="bi bi-grid-1x2-fill"></i><span>Tổng quan</span></router-link>
-          <router-link to="/rooms" class="sidebar-link" active-class="active"><i class="bi bi-controller"></i><span>Sảnh game</span><span class="nav-ping">12</span></router-link>
+          <router-link to="/rooms" class="sidebar-link" active-class="active"><i class="bi bi-controller"></i><span>Sảnh game</span></router-link>
           <router-link to="/wallet-history" class="sidebar-link" active-class="active"><i class="bi bi-wallet2"></i><span>Ví & giao dịch</span></router-link>
           <router-link v-if="authStore.profile?.role === 'SUPER_ADMIN' || authStore.profile?.role === 'ADMIN'" to="/admin" class="sidebar-link" active-class="active"><i class="bi bi-shield-lock"></i><span>Quản trị hệ thống</span><span class="admin-tag">ADMIN</span></router-link>
         </nav>
-        <div class="sidebar-label mt-4">Câu lạc bộ</div>
-        <nav class="sidebar-nav">
-          <a href="#" class="sidebar-link"><i class="bi bi-trophy"></i><span>Bảng xếp hạng</span></a>
-          <a href="#" class="sidebar-link"><i class="bi bi-people"></i><span>Bạn bè</span></a>
-          <a href="#" class="sidebar-link"><i class="bi bi-journal-text"></i><span>Cẩm nang luật</span></a>
+        <nav class="sidebar-nav mt-4">
+          <router-link to="/practice" class="sidebar-link"><i class="bi bi-mortarboard"></i><span>Sảnh luyện tập</span></router-link>
         </nav>
         <div class="sidebar-spacer"></div>
-        <div class="club-card">
-          <div class="d-flex align-items-center gap-2 mb-2"><i class="bi bi-stars text-gold"></i><span class="small fw-bold">LuNu Premium</span></div>
-          <p>Trải nghiệm bàn riêng, huy hiệu và lịch sử trận đấu nâng cao.</p>
-          <button class="btn btn-sm btn-gold w-100">Khám phá đặc quyền</button>
-        </div>
         <button @click="logout" class="sidebar-link border-0 bg-transparent text-start mt-3"><i class="bi bi-box-arrow-left"></i><span>Đăng xuất</span></button>
       </aside>
 
@@ -69,7 +61,7 @@ const logout = async () => {
           <div class="d-lg-none"><router-link to="/" class="brand-mark"><span class="brand-glyph"><i class="bi bi-diamond-half"></i></span><span><strong>LuNu</strong></span></router-link></div>
           <div class="topbar-context d-none d-md-flex"><span class="context-dot"></span><span>LuNu Club</span><span class="context-divider">/</span><span>{{ route.name === 'RoomsLobby' ? 'Sảnh game' : route.name === 'RoomDetail' ? 'Phòng chơi' : route.name === 'Profile' ? 'Hồ sơ cá nhân' : route.name === 'AdminDashboard' ? 'Quản trị hệ thống' : 'Tổng quan' }}</span></div>
           <div class="topbar-actions ms-auto">
-            <button class="icon-button" title="Thông báo"><i class="bi bi-bell"></i><span></span></button>
+
             <div class="top-wallet"><i class="bi bi-coin"></i><strong>{{ walletStore.balance.toLocaleString('vi-VN') }}</strong><small>xu</small></div>
             <router-link to="/profile" class="profile-chip"><img :src="avatar" :alt="displayName"><div class="d-none d-sm-block"><strong>{{ displayName }}</strong><small>@{{ username }}</small></div><i class="bi bi-chevron-down text-muted small"></i></router-link>
           </div>

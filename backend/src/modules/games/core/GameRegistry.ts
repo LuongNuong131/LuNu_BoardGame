@@ -1,4 +1,4 @@
-import { GameEngine } from './GameEngine';
+import type { GameEngine } from './GameEngine';
 import { AppError } from '../../../shared/errors/AppError';
 
 class GameRegistry {

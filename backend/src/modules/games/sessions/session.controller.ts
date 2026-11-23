@@ -40,6 +40,46 @@ const resolveEngine = (gameId: string) => {
   catch { throw new AppError(409, 'ENGINE_NOT_READY', `Engine cho game ${gameId} chưa sẵn sàng. Phòng vẫn có thể dùng để chờ và xem bàn.`); }
 };
 
+const playerIdOf = (player: any): string | undefined => typeof player === 'string' ? player : player?.playerId;
+const participates = (state: any, id: string) => state.players?.some((player: any) => playerIdOf(player) === id);
+const nextUpdatedAt = (updatedAt: string) => new Date(Math.max(Date.now(), Date.parse(updatedAt) + 1)).toISOString();
+
+function outcomeColumns(engine: ReturnType<typeof resolveEngine>, state: any) {
+  if (!engine.isFinished(state)) return { status: 'PLAYING', winner_id: null };
+  const result = engine.calculateResult(state) as any;
+  const winner = result.winner || result.winnerPlayerId;
+  const isProfileId = typeof winner === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(winner);
+  return { status: 'FINISHED', winner_id: isProfileId ? winner : null };
+}
+
+async function reconcileExpired(session: any) {
+  if (session.status !== 'PLAYING') return session;
+  const engine = resolveEngine(session.game_id);
+  const next = engine.advanceExpired?.(session.current_state);
+  if (!next || next === session.current_state) return session;
+  next.revision = Number(session.current_state.revision || 0) + 1;
+  const { data, error } = await supabaseAdmin.from('game_sessions')
+    .update({ current_state: next, ...outcomeColumns(engine, next), updated_at: nextUpdatedAt(session.updated_at) })
+    .eq('id', session.id).eq('updated_at', session.updated_at).eq('status', 'PLAYING').select().maybeSingle();
+  if (error) throw new AppError(500, 'DB_ERROR', `Không thể cập nhật giai đoạn: ${error.message}`);
+  if (data) return data;
+  const latest = await supabaseAdmin.from('game_sessions').select('*').eq('id', session.id).maybeSingle();
+  return latest.data ?? session;
+}
+
+async function sessionView(session: any, userId: string) {
+  const players = await getActiveRoomPlayers(session.room_id);
+  const isPlayer = players.some((player: any) => player.user_id === userId) && participates(session.current_state, userId);
+  const { current_state, id, room_id, game_id, status, started_at, updated_at } = session;
+  const engine = resolveEngine(session.game_id);
+  return {
+    session: { id, room_id, game_id, status, started_at, updated_at },
+    state: { ...engine.getPublicState(current_state, isPlayer ? userId : ''), revision: current_state.revision || 0 },
+    participants: await getSessionParticipants(session.room_id, current_state),
+    isPlayer,
+  };
+}
+
 export const startGame = async (request: FastifyRequest, reply: FastifyReply) => {
   const { roomId } = request.params as any;
   const userId = request.user!.id;
@@ -55,26 +95,33 @@ export const startGame = async (request: FastifyRequest, reply: FastifyReply) =>
   const requestBody = (request.body || {}) as any;
   const againstAi = Boolean(requestBody.against_ai);
   const aiDifficulty = ['EASY', 'MEDIUM', 'HARD'].includes(String(requestBody.ai_level).toUpperCase()) ? String(requestBody.ai_level).toUpperCase() : 'MEDIUM';
-  const players = await requireActivePlayer(roomId, userId);
-  if (!againstAi && players.length < 2) throw new AppError(400, 'NOT_ENOUGH_PLAYERS', 'Cần ít nhất 2 người để bắt đầu.');
-  if (againstAi && players.length !== 1) throw new AppError(400, 'AI_SETUP_INVALID', 'Chế độ đấu máy cần đúng một người thật trong bàn.');
+  const players = (await requireActivePlayer(roomId, userId)).sort((a, b) => (a.seat_index ?? 0) - (b.seat_index ?? 0));
+  const { data: game, error: gameError } = await supabaseAdmin.from('games').select('min_players, max_players, is_active').eq('id', room.game_id).single();
+  if (gameError || !game?.is_active) throw new AppError(409, 'GAME_DISABLED', 'Trò chơi hiện không khả dụng.');
+  if (!againstAi && (players.length < game.min_players || players.length > game.max_players)) {
+    throw new AppError(400, 'INVALID_PLAYER_COUNT', `Cần ${game.min_players}–${game.max_players} người để bắt đầu.`);
+  }
+  if (againstAi && (players.length !== 1 || !['CHESS', 'CO_TUONG'].includes(room.game_id))) {
+    throw new AppError(400, 'AI_SETUP_INVALID', 'Đấu máy trực tuyến dành cho bàn cờ có một người thật.');
+  }
 
   const engine = resolveEngine(room.game_id);
   const sessionPlayers = againstAi ? [...players.map((player: any) => player.user_id), `AI_${aiDifficulty}`] : players.map((player: any) => player.user_id);
-  const initialState: any = engine.initialize(sessionPlayers, {});
+  const initialState: any = engine.initialize(sessionPlayers, { roomId, gameId: room.game_id });
   if (againstAi) initialState.aiDifficulty = aiDifficulty;
   let { data: session, error: sessionError } = await supabaseAdmin.from('game_sessions')
     .insert({ room_id: roomId, game_id: room.game_id, current_state: initialState, status: 'PLAYING' })
     .select().single();
-  if (sessionError?.code === '23505') {
+  if (sessionError?.code === '23505' || sessionError?.message === 'lunu_room_running') {
     const active = await supabaseAdmin.from('game_sessions').select('*').eq('room_id', roomId).eq('status', 'PLAYING').order('started_at', { ascending: false }).limit(1).maybeSingle();
     session = active.data;
     sessionError = active.error;
   }
+  if (sessionError?.message === 'INSUFFICIENT_BALANCE') throw new AppError(409, 'INSUFFICIENT_BALANCE', 'Có người chơi không đủ xu để vào ván.');
+  if (sessionError?.message === 'lunu_ai_free_only') throw new AppError(400, 'AI_FREE_ONLY', 'Đấu máy trực tuyến chỉ có ở phòng miễn phí.');
+  if (sessionError?.message === 'lunu_roster_changed') throw new AppError(409, 'ROSTER_CHANGED', 'Ghế trong phòng vừa thay đổi. Hãy thử bắt đầu lại.');
   if (sessionError || !session) throw new AppError(500, 'DB_ERROR', sessionError?.message || 'Không thể tạo phiên chơi.');
 
-  const { error: statusError } = await supabaseAdmin.from('game_rooms').update({ status: 'RUNNING', updated_at: new Date().toISOString() }).eq('id', roomId);
-  if (statusError) throw new AppError(500, 'DB_ERROR', `Không thể cập nhật trạng thái phòng: ${statusError.message}`);
   return reply.send({ success: true, data: { sessionId: session.id, gameId: session.game_id, againstAi, aiDifficulty: againstAi ? aiDifficulty : null }, error: null });
 };
 
@@ -84,44 +131,40 @@ export const getActiveRoomSession = async (request: FastifyRequest, reply: Fasti
   const { data: session, error } = await supabaseAdmin.from('game_sessions').select('*').eq('room_id', roomId).eq('status', 'PLAYING').order('started_at', { ascending: false }).limit(1).maybeSingle();
   if (error) throw new AppError(500, 'DB_ERROR', `Không thể đọc phiên đang chạy: ${error.message}`);
   if (!session) return reply.send({ success: true, data: null, error: null });
-  const players = await getActiveRoomPlayers(roomId);
-  const engine = resolveEngine(session.game_id);
-  const state = engine.getPublicState(session.current_state, userId);
-  return reply.send({ success: true, data: { session: { id: session.id, room_id: session.room_id, game_id: session.game_id, status: session.status, started_at: session.started_at, updated_at: session.updated_at }, state, participants: await getSessionParticipants(roomId, session.current_state), isPlayer: players.some((player: any) => player.user_id === userId) }, error: null });
+  const current = await reconcileExpired(session);
+  return reply.send({ success: true, data: current.status === 'PLAYING' ? await sessionView(current, userId) : null, error: null });
 };
 
 export const getSessionState = async (request: FastifyRequest, reply: FastifyReply) => {
   const { sessionId } = request.params as any;
-  const userId = request.user!.id;
   const { data: session, error } = await supabaseAdmin.from('game_sessions').select('*').eq('id', sessionId).single();
   if (error || !session) throw new AppError(404, 'NOT_FOUND', 'Không tìm thấy ván đấu');
-
-  const engine = resolveEngine(session.game_id);
-  const players = await getActiveRoomPlayers(session.room_id);
-  const publicState = engine.getPublicState(session.current_state, userId);
-  return reply.send({ success: true, data: {
-    session: { id: session.id, room_id: session.room_id, game_id: session.game_id, status: session.status, started_at: session.started_at, updated_at: session.updated_at },
-    state: publicState,
-    participants: await getSessionParticipants(session.room_id, session.current_state),
-    isPlayer: players.some((player: any) => player.user_id === userId)
-  }, error: null });
+  return reply.send({ success: true, data: await sessionView(await reconcileExpired(session), request.user!.id), error: null });
 };
 
 export const playAction = async (request: FastifyRequest, reply: FastifyReply) => {
   const { sessionId } = request.params as any;
-  const { action } = request.body as any;
+  const { action, revision } = (request.body || {}) as any;
+  if (!action || typeof action !== 'object' || typeof action.type !== 'string') {
+    throw new AppError(400, 'INVALID_ACTION', 'Hành động không hợp lệ.');
+  }
   const userId = request.user!.id;
-  const { data: session, error } = await supabaseAdmin.from('game_sessions').select('*').eq('id', sessionId).single();
+  const { data: storedSession, error } = await supabaseAdmin.from('game_sessions').select('*').eq('id', sessionId).single();
+  const session = storedSession && await reconcileExpired(storedSession);
   if (error || !session || session.status !== 'PLAYING') throw new AppError(400, 'INVALID', 'Game không khả dụng');
   await requireActivePlayer(session.room_id, userId);
+  if (revision !== undefined && revision !== Number(session.current_state.revision || 0)) {
+    throw new AppError(409, 'STALE_SESSION', 'Bàn có nước đi mới. Hãy thử lại sau khi đồng bộ.');
+  }
+
+  if (!participates(session.current_state, userId)) throw new AppError(403, 'SPECTATOR_READ_ONLY', 'Ghế này sẽ có hiệu lực từ ván tiếp theo.');
 
   const engine = resolveEngine(session.game_id);
   if (!engine.validateAction(session.current_state, action, userId)) throw new AppError(400, 'INVALID_ACTION', 'Nước đi không hợp lệ (Không đúng lượt hoặc sai luật).');
   let { newState, events } = engine.applyAction(session.current_state, action, userId);
   const aiEvents: any[] = [];
-  for (let turn = 0; turn < 3; turn += 1) {
-    const currentEntry = newState.players?.[newState.currentTurnIndex];
-    const currentPlayer = typeof currentEntry === 'string' ? currentEntry : currentEntry?.playerId;
+  for (let turn = 0; turn < 64; turn += 1) {
+    const currentPlayer = newState.currentPlayer || playerIdOf(newState.players?.[newState.currentTurnIndex]);
     if (!currentPlayer?.startsWith('AI_') || typeof (engine as any).getAiAction !== 'function') break;
     const aiDifficulty = newState.aiDifficulty || 'MEDIUM';
     const aiAction = (engine as any).getAiAction(newState, currentPlayer, aiDifficulty);
@@ -131,29 +174,19 @@ export const playAction = async (request: FastifyRequest, reply: FastifyReply) =
     aiEvents.push(...aiTurn.events.map((event: any) => ({ ...event, automated: true })));
   }
   events = [...events, ...aiEvents];
-  const safeEvents = events.map((event: any) => ({ type: event.type, playerId: event.playerId, winner: event.winner, target: event.target, amount: event.amount, action: event.action, dice: event.dice, position: event.position, automated: event.automated, at: new Date().toISOString() }));
+  const safeEvents = events.map((event: any) => ({ type: event.type, playerId: event.playerId, winner: event.winner, amount: event.amount, action: event.action, dice: event.dice, notation: event.notation, reason: event.reason, automated: event.automated, at: new Date().toISOString() }));
   newState.actionLog = [...(session.current_state.actionLog || []), ...safeEvents].slice(-24);
   newState.revision = Number(session.current_state.revision || 0) + 1;
-  let status = 'PLAYING';
-  let winner = null;
-  let finished = false;
-  if (engine.isFinished(newState)) {
-    status = 'FINISHED';
-    const result = engine.calculateResult(newState) as any;
-    winner = result.winner || result.winnerPlayerId || result.winnerTeam || null;
-    finished = true;
-  }
-
   const { data: persistedAction, error: updateError } = await supabaseAdmin.from('game_sessions')
-    .update({ current_state: newState, status, winner_id: winner, updated_at: new Date().toISOString() })
+    .update({ current_state: newState, ...outcomeColumns(engine, newState), updated_at: nextUpdatedAt(session.updated_at) })
     .eq('id', sessionId)
     .eq('updated_at', session.updated_at)
+    .eq('status', 'PLAYING')
     .select('id')
     .maybeSingle();
   if (updateError) throw new AppError(500, 'DB_ERROR', `Không thể lưu nước đi: ${updateError.message}`);
   if (!persistedAction) throw new AppError(409, 'STALE_SESSION', 'Ván vừa có nước đi mới từ người chơi khác. Bàn sẽ tự đồng bộ lại.');
-  if (finished) await supabaseAdmin.from('game_rooms').update({ status: 'WAITING', updated_at: new Date().toISOString() }).eq('id', session.room_id).eq('status', 'RUNNING');
 
   const publicState = engine.getPublicState(newState, userId);
-  return reply.send({ success: true, data: { state: publicState, events }, error: null });
+  return reply.send({ success: true, data: { state: { ...publicState, revision: newState.revision }, events: safeEvents }, error: null });
 };

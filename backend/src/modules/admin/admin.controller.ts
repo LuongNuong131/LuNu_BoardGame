@@ -55,12 +55,18 @@ export const createUser = async (request: FastifyRequest, reply: FastifyReply) =
     throw new AppError(400, 'VALIDATION_ERROR', 'Vui lòng nhập đủ thông tin (Username, Password, Display Name).');
   }
 
+  const accountRole = role || 'USER';
+  if (!['USER', 'MODERATOR', 'ADMIN', 'SUPER_ADMIN'].includes(accountRole)) throw new AppError(400, 'INVALID_ROLE', 'Vai trò không hợp lệ.');
+  if (request.user!.role !== 'SUPER_ADMIN' && ['ADMIN', 'SUPER_ADMIN'].includes(accountRole)) {
+    throw new AppError(403, 'FORBIDDEN', 'Chỉ SUPER_ADMIN có thể tạo tài khoản quản trị.');
+  }
   const internalEmail = `${username}@gameverse.local`;
   const { data, error } = await supabaseAdmin.auth.admin.createUser({
     email: internalEmail,
     password,
     email_confirm: true,
-    user_metadata: { username, display_name, role: role || 'USER' }
+    user_metadata: { username, display_name },
+    app_metadata: { role: accountRole }
   });
   if (error) throw new AppError(400, 'CREATE_USER_FAILED', error.message);
   return reply.send({ success: true, data: data.user, error: null });

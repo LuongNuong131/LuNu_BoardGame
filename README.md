@@ -9,7 +9,7 @@
 
 LuNu BoardGame là một hệ thống chơi game nhiều người được xây dựng theo hướng **server-authoritative**. Frontend Vue chịu trách nhiệm hiển thị và tương tác; backend Fastify kiểm tra quyền, luật, lượt chơi và kết toán; Supabase cung cấp Auth, PostgreSQL, Realtime và Storage. Mục tiêu của kiến trúc này là để mọi client nhìn thấy cùng một session, mọi action được kiểm chứng ở server và spectator không thể gửi nước đi giả.
 
-> **Trạng thái dự án:** nền tảng realtime, room seating, player/spectator, profile/avatar, wallet, admin, session concurrency và các catalog engine đã được triển khai. Một số game đã có luật nền tảng playable; các luật thi đấu chuyên sâu vẫn được theo dõi trong roadmap trước khi mở xếp hạng hoặc tiền thật.
+LuNu có 15 trò trong sảnh luyện tập `/practice`. Sảnh này chạy các engine trong trình duyệt với đối thủ máy và không cần tài khoản. Bàn trực tuyến dùng cùng luật, đọc dữ liệu của từng người qua API và phát tín hiệu cập nhật từ Supabase.
 
 ## Mục lục
 
@@ -37,11 +37,11 @@ LuNu BoardGame là một hệ thống chơi game nhiều người được xây 
 
 | Nhóm | Khả năng |
 |---|---|
-| **Lobby** | Mặc định hiển thị tất cả game, lọc theo thể loại, phí, số người và trạng thái phòng. Phòng `WAITING` và `RUNNING` đều xuất hiện để người thật có thể vào ghế trống giữa trận. |
-| **Room seating** | Ghế `PLAYER` được ưu tiên cho người thật. Khi hết ghế, người mới vào `SPECTATOR`. Khi một người rời bàn, ghế được giải phóng theo thứ tự ổn định. |
+| **Lobby** | Mặc định hiển thị tất cả game, lọc theo thể loại, phí, số người và trạng thái phòng. Phòng `WAITING` và `RUNNING` đều xuất hiện. Bàn đang chơi cho phép theo dõi và giữ ghế cho ván kế tiếp. |
+| **Room seating** | Ghế `PLAYER` được ưu tiên cho người thật. Khi hết ghế, người mới vào `SPECTATOR`. Người chơi có thể trả ghế. Ván hiện tại dừng nếu ghế đó đang tham gia. |
 | **Realtime** | Lobby, ghế, chat, session state, action log và trạng thái kết nối được đồng bộ qua Supabase Realtime, kèm polling fallback khi channel lỗi hoặc timeout. |
 | **Session** | Mỗi phòng chỉ có một session `PLAYING` theo unique partial index. Start và action dùng optimistic concurrency để tránh tạo ván trùng hoặc ghi đè nước đi. |
-| **AI tùy chọn** | AI không thay thế người thật. Chỉ khi chủ phòng chọn đấu máy, backend mới tạo AI slot; người thật vào sau sẽ thay thế slot AI nếu còn ghế. |
+| **AI tùy chọn** | AI không thay thế người thật. Chỉ khi chủ phòng chọn đấu máy, backend mới tạo AI slot; người thật vào sau có thể tiếp quản ghế máy ở bàn cờ miễn phí. |
 | **Arena** | Hiển thị participant thật, quyền PLAYER/SPECTATOR, server action log, vòng chơi, pot/bet, community cards và trạng thái realtime. Spectator bị khóa ở cả UI lẫn backend. |
 | **Tài khoản** | Supabase Auth, khôi phục session khi reload, profile, username, display name, avatar và trang lịch sử wallet. |
 | **Admin** | Dashboard quản lý user, role, wallet audit, xóa phòng và xóa user có safeguard; không cho self-delete hoặc xóa `SUPER_ADMIN`. |
@@ -77,33 +77,31 @@ Frontend không tự quyết định winner, lượt chơi hoặc quyền specta
 
 ## Danh mục game
 
-| Game ID | Tên hiển thị | Thể loại | Nền tảng gameplay hiện có |
-|---|---|---|---|
-| `UNO` | UNO | Card | Engine UNO riêng, turn loop, draw, play, màu và action card. |
-| `WEREWOLF` | Ma Sói | Social | Vai trò cơ bản, phase ngày/đêm, vote và night action. |
-| `TIEN_LEN` | Tiến lên miền Nam | Card | Đơn, đôi, sám, sảnh, tứ quý, chặn cùng loại, pass và mở vòng mới. |
-| `BLACKJACK` | Blackjack | Card | HIT/STAND, tính Át linh hoạt và settlement. |
-| `PHOM` | Phỏm | Card | Nhịp rút–đánh, discard và hand submission foundation. |
-| `XI_DACH` | Xì dách | Card | HIT/STAND, dealer state và settlement foundation. |
-| `POKER` | Poker | Card | Pre-flop, flop, turn, river, community cards, bet/call/raise/check/fold và showdown foundation. |
-| `MAU_BINH` | Mậu binh | Card | Chia hand và chốt tay đồng thời; scoring chuyên sâu nằm trong roadmap. |
-| `BAO_CAO` | Bài cào | Card | Chốt hand và so điểm server-side. |
-| `LIENG` | Liêng | Card | Vòng cược cơ bản, fold và so điểm foundation. |
-| `CHESS` | Cờ vua | Board | Board state, quân cờ, kiểm tra đường đi cơ bản, bắt quân và AI move foundation. |
-| `CO_TUONG` | Cờ tướng | Board | Board 10×9, quân cờ, pháo, mã, tượng, sĩ, tướng, tốt và AI move foundation. |
-| `CO_CA_NGUA` | Cờ cá ngựa | Board | Dice, position và race-to-finish foundation. |
-| `CO_TY_PHU` | Cờ tỷ phú | Board | Dice, position và turn loop foundation. |
-| `EXPLODING_KITTENS` | Mèo nổ | Card | Bomb, Defuse, pending explosion và loại người chơi khi không cứu được. |
+| Trò chơi | Luật đang chạy |
+|---|---|
+| UNO | Đánh theo số hoặc màu, đổi màu, lá phạt, đảo chiều, rút rồi quyết định đánh hay qua lượt, hô UNO. |
+| Ma Sói | Chia vai kín, hành động đêm, thảo luận theo giờ, bỏ phiếu, tiên tri, bảo vệ, phù thủy và thợ săn. |
+| Tiến lên miền Nam | 13 lá mỗi người, lá mở màn, chặn theo chất, đôi thông, chặt heo, bỏ một vòng và xếp hạng về bài. |
+| Blackjack | Mỗi tay đấu với nhà cái tự động, luật Át, blackjack tự nhiên, quắc và hòa. |
+| Phỏm | Rút hoặc ăn lá bỏ, khóa phỏm đã ăn, đánh rác, ù và tính điểm các lá rác cuối ván. |
+| Xì dách | Ghế đầu làm cái, so từng tay, xì bàn, xì dách, ngũ linh và quắc. |
+| Poker | Một tay Texas Hold’em với blind 10/20, 1.000 chip đầu ván, tố, tất tay, bộ 5 lá mạnh nhất và pot phụ. |
+| Mậu binh | Xếp chi 3–5–5, so thứ tự để phát hiện binh lủng, tính điểm từng cặp người chơi và sập ba chi. |
+| Bài cào | Ba lá, điểm hàng đơn vị và đồng thắng khi bằng điểm. |
+| Liêng | Ante, theo, tố, úp và so sáp, liêng, ảnh rồi điểm hàng đơn vị. |
+| Cờ vua | Chiếu, chiếu hết, nhập thành, bắt tốt qua đường, phong cấp, hòa do lặp thế hoặc hết nước. |
+| Cờ tướng | Chân mã, mắt tượng, cung, sông, pháo, lộ mặt tướng và kết thúc khi không còn nước hợp lệ. Luật hòa của LuNu dùng lặp ba lần hoặc giới hạn 300 nước. |
+| Cờ cá ngựa | Bốn quân mỗi người, xuất quân với 1 hoặc 6, đá quân, thêm lượt khi đi được mặt 6 và về đích đúng số bước. |
+| Cờ tỷ phú | Biến thể Thành phố LuNu có mua đất, nâng cấp, tiền thuê, phá sản và so tài sản sau 20 vòng. |
+| Mèo nổ | Biến thể LuNu có lá Xáo bài, Bỏ lượt và Gỡ bom. Người chơi chọn vị trí cài lại bom, người sống cuối cùng thắng. |
 
-Tên engine được đăng ký tại [`backend/src/modules/games/core/init-games.ts`](./backend/src/modules/games/core/init-games.ts). Các catalog class nằm tại [`backend/src/modules/games/catalog/CatalogEngines.ts`](./backend/src/modules/games/catalog/CatalogEngines.ts).
-
-> **Phân biệt rõ:** “playable foundation” không đồng nghĩa với luật giải đấu hoàn chỉnh. Không nên dùng các engine đang ở roadmap cho tiền thật, ranking chính thức hoặc kết quả có giá trị tài chính trước khi hoàn thiện test luật và audit độc lập.
+Engine được đăng ký trong [init-games.ts](./backend/src/modules/games/core/init-games.ts).
 
 ## Yêu cầu hệ thống
 
 | Thành phần | Khuyến nghị |
 |---|---|
-| Node.js | LTS hiện hành; trên Windows nên dùng Node.js LTS thay vì bản experimental. |
+| Node.js | Node.js 24 LTS. |
 | npm | Đi kèm Node.js, dùng được cho workflow Windows. |
 | Git | Để clone, pull và theo dõi migration. |
 | Supabase project | Bật Auth, PostgreSQL, Realtime và Storage. |
@@ -117,14 +115,13 @@ Repository không có root `package.json`; frontend và backend là hai workspac
 git clone https://github.com/LuongNuong131/LuNu_BoardGame.git
 cd LuNu_BoardGame
 
-cd backend
-npm install
-
-cd ../frontend
-npm install
+npm ci --prefix backend
+npm ci --prefix frontend
 ```
 
 Trên Windows PowerShell, các lệnh trên có thể chạy trong hai terminal riêng. Không commit `.env`, service-role key hoặc bất kỳ secret nào vào Git.
+
+Mở sảnh luyện tập với `npm --prefix frontend run dev` rồi vào `http://localhost:5173/practice`. Hai workspace đều cần cài dependency vì frontend luyện tập nhập các engine TypeScript từ backend.
 
 ## Cấu hình environment
 
@@ -167,6 +164,7 @@ Bundle này ghép các migration theo đúng thứ tự:
 backend/supabase/migrations/202608220000_core_schema.sql
 backend/supabase/migrations/202608220001_room_seating.sql
 backend/supabase/migrations/202608220002_game_catalog.sql
+backend/supabase/migrations/202611230000_session_lifecycle.sql
 ```
 
 Bundle được thiết kế theo hướng idempotent cho việc cài đặt lại. Nó bao gồm bảng profile, wallet, game catalog, room, seating, chat, game session, RLS, Realtime publication, wallet RPC, Storage bucket `avatars`, Storage policies và unique index chống nhiều session `PLAYING` trong cùng một room.
@@ -175,13 +173,10 @@ Sau khi sửa bất kỳ migration nào, phải tái tạo bundle trước khi g
 
 ```bash
 cd backend
-cat supabase/migrations/202608220000_core_schema.sql \
-    supabase/migrations/202608220001_room_seating.sql \
-    supabase/migrations/202608220002_game_catalog.sql \
-    > supabase/LuNuBoardGame_FULL_SCHEMA.sql
+cat supabase/migrations/*.sql > supabase/LuNuBoardGame_FULL_SCHEMA.sql
 ```
 
-Nếu database đã có dữ liệu production, hãy backup trước khi chạy migration. Không tự ý chạy `DROP` trên project thật nếu chưa hiểu tác động.
+Với database đã cài ba migration đầu, áp dụng `202611230000_session_lifecycle.sql` trước khi chạy backend mới. Với database mới, dùng toàn bộ bundle. Nếu tài khoản quản trị được tạo bằng mật khẩu mẫu của script cũ, hãy đổi mật khẩu đang dùng. Script mới đọc `LUNU_ADMIN_PASSWORD` từ môi trường.
 
 ## Chạy frontend và backend
 
@@ -218,6 +213,7 @@ Các route frontend chính:
 
 | Route | Mục đích |
 |---|---|
+| `/practice` | Sảnh luyện tập công khai với 15 trò chơi. |
 | `/login` | Đăng nhập; đăng ký đang được ẩn theo yêu cầu sản phẩm. |
 | `/` | Home/dashboard. |
 | `/rooms` | Lobby tất cả game. |
@@ -229,18 +225,11 @@ Các route frontend chính:
 
 ## Luồng multiplayer realtime
 
-Luồng chuẩn của một ván multiplayer như sau:
-
-1. Chủ phòng tạo room ở trạng thái `WAITING`; client đăng ký lobby channel và polling fallback.
-2. Người chơi khác gọi `POST /api/rooms/:roomId/join`. RPC `join_room` chọn ghế trống theo `seat_index` bất kể room đang `WAITING` hay `RUNNING`.
-3. Nếu còn ghế, response trả `mode: PLAYER`, `seatIndex` và `activeSessionId` nếu session đang chạy. Nếu không còn ghế, response trả `mode: SPECTATOR`.
-4. Khi chủ phòng start, backend tạo hoặc lấy session `PLAYING`, khởi tạo engine và cập nhật room thành `RUNNING`.
-5. Client nhận `activeSessionId` hoặc event Realtime rồi điều hướng vào cùng `/game/:sessionId`.
-6. Khi người thật vào một phòng đang đấu máy và còn ghế, backend gọi `engine.addPlayer()` và thay slot `AI_*` bằng user thật trong `current_state`.
-7. Mỗi action được backend kiểm tra role, membership, lượt, payload và luật game. Session update có điều kiện `updated_at`; client thua concurrency sẽ nhận lỗi stale và tự đồng bộ lại.
-8. Khi hết ghế, client vẫn được xem state, participant và action log nhưng không thể gửi action. Đây là spectator read-only ở cả hai lớp.
-
-Nếu Realtime chưa bật hoặc publication chưa được áp dụng, polling fallback vẫn giúp lobby và arena cập nhật, nhưng production vẫn phải chạy đúng SQL bundle để đạt độ trễ và tính nhất quán tốt nhất.
+- Chủ bàn bắt đầu khi đủ số người của trò chơi. Thành viên được xếp theo số ghế. PostgreSQL khóa phòng, xác nhận lại danh sách ghế và tạo tối đa một ván đang chạy.
+- Người đến muộn có thể theo dõi ván hiện tại và giữ ghế cho ván sau. Ở bàn cờ miễn phí, người vào ghế trống có thể thay máy và giữ nguyên thế cờ.
+- API kiểm tra ghế, lượt, phiên bản và luật trước khi ghi nước đi. Kênh `game_session_signals` chỉ phát mã phiên, mã phòng, trạng thái và thời điểm cập nhật. Client lấy bài, vai và quyền hành động đã lọc qua API.
+- Client đồng bộ định kỳ mỗi 2,5 giây khi cần và bỏ qua bản trạng thái cũ. Khi người đang chơi trả ghế, ván dừng và phòng mở lại.
+- Phòng thu phí bằng xu ảo khi bắt đầu, trả pot theo người thắng, chia pot nếu có nhiều người thắng và hoàn phí khi ván bị hủy hoặc không có người thắng nhận pot. Chip Poker và Liêng chỉ tồn tại trong ván.
 
 ## Auth, role và bảo mật
 
@@ -365,44 +354,15 @@ Tên route thực tế có thể được đối chiếu trong `backend/src/modu
 
 ## Kiểm thử và release
 
-Type-check backend:
-
 ```bash
-cd backend
-./node_modules/.bin/tsc --pretty false
+npm --prefix backend test
+npm --prefix backend run build
+npm --prefix frontend run build
 ```
 
-Type-check frontend:
+Bộ test chạy cả 15 engine đến kết quả. Các ca riêng kiểm tra nước cờ hợp lệ, tay Poker, ẩn bài, xếp chi, thông tin riêng của Ma Sói và Tiến lên. Kiểm thử SQL chạy bundle hai lần trên PostgreSQL nhúng, tạo phòng, giữ ghế, đăng ký tín hiệu Realtime, chặn tạo ván trùng và đối soát thu, thưởng, hoàn phí.
 
-```bash
-cd frontend
-./node_modules/.bin/vue-tsc --noEmit --pretty false
-```
-
-Production build:
-
-```bash
-cd frontend
-npm run build
-
-cd ../backend
-npm run build
-```
-
-Smoke test engine nên kiểm tra tối thiểu:
-
-- Người chơi thứ hai vào phòng RUNNING nhận đúng ghế và xuất hiện trong `current_state.players`.
-- Spectator không thể gửi action dù frontend bị bypass.
-- Hai action cạnh tranh không ghi đè nhau.
-- Không tạo hai session `PLAYING` cho một room.
-- Tiến lên kiểm tra combo/chặn/pass.
-- Phỏm giữ lượt sau khi rút cho tới khi discard.
-- Blackjack xử lý Ace 1/11.
-- Poker mở đúng flop/turn/river.
-- Chess/Cờ tướng từ chối quân sai màu, ô ngoài bàn và đường đi bị chặn.
-- Mèo nổ yêu cầu Defuse khi rút Bomb.
-
-Một release hợp lệ cần có migration source, SQL bundle được tái tạo, build frontend/backend thành công, `git diff --check` không lỗi và repository không chứa secret.
+Kiểm thử Supabase staging cần hai người chơi và một người xem để xác nhận đăng nhập, nước đi, tín hiệu Realtime, kết nối lại và rời bàn qua API.
 
 ## Troubleshooting
 
@@ -435,13 +395,10 @@ Kiểm tra Supabase Auth session ở browser, `VITE_SUPABASE_URL`, `VITE_SUPABAS
 
 ## Roadmap
 
-| Giai đoạn | Mục tiêu |
-|---|---|
-| **R1 — Multiplayer stability** | Hoàn thiện integration test cho join RUNNING, leave/re-seat, reconnect và duplicate start. |
-| **R2 — Card rules** | Tách engine chuyên biệt cho Texas Hold’em evaluator/side pot, Phỏm scoring, Mậu binh arrangement, Xì dách dealer flow và Ma Sói role system mở rộng. |
-| **R3 — Board rules** | Bổ sung check/checkmate, castling, promotion, en passant cho Chess; tướng đối mặt, luật cung/sông và checkmate cho Cờ tướng. |
-| **R4 — Economy safety** | Entry fee, escrow, settlement transaction, idempotency key, ledger reconciliation và audit dashboard trước khi có tiền thật. |
-| **R5 — Quality** | Unit/property tests cho từng engine, load test Realtime, observability, structured logs, rate limit và CI/CD. |
+- Kiểm tra nhiều tài khoản trên một dự án Supabase staging và đo tải Realtime.
+- Bổ sung các luật thi đấu chưa có trong phiên bản LuNu, gồm khiếu nại lặp thế ở cờ tướng, gửi bài ở Phỏm, các lựa chọn split/double ở Blackjack và vòng nhiều tay với nút cái luân phiên ở Poker.
+- Thêm lịch sử thành tích người chơi và bảng xếp hạng sau khi thống nhất tiêu chí chấm.
+- Xác minh giao diện theo trình duyệt và kích thước màn hình trước khi phát hành.
 
 ## Đóng góp
 

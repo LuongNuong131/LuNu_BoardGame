@@ -25,7 +25,9 @@ assert.equal(state.players.find((player) => player.cards.some((item) => item.car
 assert.equal(engine.getPublicState(state, 'p1').players.every((player: any) => player.cards === undefined), true);
 
 const first = state.players.find((player) => player.playerId === state.startingPlayer)!;
-const firstCard = first.cards.slice().sort((a, b) => a.rank - b.rank)[0];
+const firstCard = first.cards.find((item) => item.cardId === state.openingCardId)!;
+assert.equal(engine.initialize(['p1', 'p2'], { seed: 1 }).players[0].cards.length, 13);
+assert.equal(JSON.stringify(engine.getPublicState(state, 'p1')).includes('seed'), false);
 assert.equal(engine.validateAction(state, { type: 'PLAY_CARDS', cardIds: [firstCard.cardId], actionId: 'a1' }, first.playerId), true);
 state = engine.applyAction(state, { type: 'PLAY_CARDS', cardIds: [firstCard.cardId], actionId: 'a1' }, first.playerId).newState;
 assert.equal(engine.validateAction(state, { type: 'PLAY_CARDS', cardIds: [firstCard.cardId], actionId: 'a1' }, state.currentPlayer), false);
