@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { initializeGames } from '../core/init-games';
 import { gameRegistry } from '../core/GameRegistry';
+import { settleBets } from './BettingRules';
 import { bestPokerHand, compareRanks, type PlayingCard } from './CardRules';
 import { ChessEngine, ChineseChessEngine, PokerEngine, MauBinhEngine, PhomEngine } from './CatalogEngines';
 
@@ -60,6 +61,19 @@ test('Poker enforces bet limits, deals the board, hides cards and conserves chip
   assert.equal(state.bettingRound, 'SHOWDOWN');
   assert.equal(state.communityCards.length, 5);
   assert.equal(Object.values(state.stacks!).reduce((sum, amount) => sum + amount, 0), 3000);
+});
+
+test('Poker settles the main pot and side pot to their respective winners', () => {
+  const engine = new PokerEngine();
+  const state = engine.initialize(['a', 'b', 'c']);
+  state.hands = { a: [card(1, 'H'), card(1, 'S')], b: [card(13, 'H'), card(13, 'S')], c: [card(12, 'H'), card(12, 'S')] };
+  state.communityCards = [card(2, 'H'), card(4, 'D'), card(6, 'C'), card(8, 'D'), card(10, 'S')];
+  state.invested = { a: 100, b: 200, c: 200 };
+  state.stacks = { a: 0, b: 800, c: 800 };
+  settleBets(state);
+  assert.deepEqual(state.payouts, { a: 300, b: 200, c: 0 });
+  assert.deepEqual(state.winners, ['a', 'b']);
+  assert.equal(state.phase, 'FINISHED');
 });
 
 test('Phỏm controls the draw/discard phase and Mậu binh rejects duplicate cards', () => {
