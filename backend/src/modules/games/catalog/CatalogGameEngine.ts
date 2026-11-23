@@ -1,452 +1,548 @@
-import { GameEngine } from '../core/GameEngine';
+import { Chess } from 'chess.js';
+import type { GameEngine } from '../core/GameEngine';
+import { randomInt, shuffle } from '../core/random';
+import { chessBoard, chessKey, chessMoves, legalChessMove, restoreChess } from '../boards/ChessRules';
+import { xiangqiBoard, xiangqiCheck, xiangqiMoves, legalXiangqiMove, type BoardPiece, type Point, type XiangqiColor } from '../boards/XiangqiRules';
+import { arrangeMauBinh, compareRanks, handGroups, isMeld, phomPoints, rankHand, type PlayingCard } from './CardRules';
+import { bettingOptions, initializeBets, playBet, validBet, type BettingState } from './BettingRules';
+import { CITY_CELLS, RACE_LENGTH, STABLE_FINISH, horseMoves, raceSquare } from './RaceRules';
 
-export type CatalogAction = {
-  type: string;
-  payload?: any;
-  cardId?: string;
-  card?: any;
-  amount?: number;
-};
-
-type CatalogCard = { id: string; rank: number; label: string; suit: 'S' | 'H' | 'D' | 'C'; color: 'RED' | 'BLACK' };
-type BoardPiece = { type: string; color: 'WHITE' | 'BLACK' | 'RED' | 'BLACK_SIDE' };
-type CatalogState = {
-  gameId: string;
-  players: string[];
-  hands: Record<string, CatalogCard[]>;
-  deck: CatalogCard[];
-  discardPile: CatalogCard[];
-  currentTurnIndex: number;
-  phase: string;
-  winner: string | null;
+export type CatalogAction = { type: string; payload?: Record<string, unknown>; cardId?: string; amount?: number };
+interface CatalogState extends BettingState {
+  discardPile: PlayingCard[];
   scores: Record<string, number>;
-  bets: Record<string, number>;
-  folded: Record<string, boolean>;
   done: Record<string, boolean>;
   positions: Record<string, number>;
   dice: number | null;
-  votes: Record<string, string>;
-  roles?: Record<string, string>;
   dealerId?: string | null;
-  lastAction?: any;
-  lastPlay?: { playerId: string; cards: CatalogCard[]; kind: string; power: number };
-  passesInRound: number;
+  dealerHand?: PlayingCard[];
+  outcomes?: Record<string, string>;
   hasDrawn: Record<string, boolean>;
+  discardCounts?: Record<string, number>;
+  claimedMelds?: Record<string, string[][]>;
+  arrangements?: Record<string, string[][]>;
+  lastDiscardBy?: string;
   board?: Array<Array<BoardPiece | null>>;
   boardSize?: { rows: number; columns: number };
-  communityCards: CatalogCard[];
-  bettingRound: 'PREFLOP' | 'FLOP' | 'TURN' | 'RIVER' | 'SHOWDOWN';
-  currentBet: number;
-  acted: Record<string, boolean>;
-  nightActions: Record<string, { type: string; targetUserId?: string }>;
+  chess?: { fen: string };
+  positionCounts?: Record<string, number>;
+  moveCount?: number;
+  checked?: boolean;
+  endReason?: string;
   pendingExplosion: Record<string, boolean>;
+  horses?: Record<string, number[]>;
+  properties?: Record<number, { owner: string; level: number }>;
+  cityTurns?: number;
+  cityDecision?: boolean;
+}
+
+const HAND_SIZE: Record<string, number> = {
+  BLACKJACK: 2, PHOM: 9, XI_DACH: 2, POKER: 2, MAU_BINH: 13, BAO_CAO: 3, LIENG: 3, EXPLODING_KITTENS: 4,
 };
 
-const CONFIG: Record<string, { handSize: number; category: 'card' | 'board' | 'social'; startingCoins: number }> = {
-  WEREWOLF: { handSize: 0, category: 'social', startingCoins: 0 },
-  TIEN_LEN: { handSize: 13, category: 'card', startingCoins: 0 },
-  BLACKJACK: { handSize: 2, category: 'card', startingCoins: 0 },
-  PHOM: { handSize: 9, category: 'card', startingCoins: 0 },
-  XI_DACH: { handSize: 2, category: 'card', startingCoins: 0 },
-  POKER: { handSize: 2, category: 'card', startingCoins: 0 },
-  MAU_BINH: { handSize: 13, category: 'card', startingCoins: 0 },
-  BAO_CAO: { handSize: 3, category: 'card', startingCoins: 0 },
-  LIENG: { handSize: 3, category: 'card', startingCoins: 0 },
-  CHESS: { handSize: 0, category: 'board', startingCoins: 0 },
-  CO_TUONG: { handSize: 0, category: 'board', startingCoins: 0 },
-  CO_CA_NGUA: { handSize: 0, category: 'board', startingCoins: 0 },
-  CO_TY_PHU: { handSize: 0, category: 'board', startingCoins: 1500 },
-  EXPLODING_KITTENS: { handSize: 4, category: 'social', startingCoins: 0 },
-  UNO: { handSize: 7, category: 'card', startingCoins: 0 }
-};
+const mapPlayers = <T>(players: string[], value: (player: string) => T) =>
+  Object.fromEntries(players.map((player) => [player, value(player)]));
+const event = (type: string, playerId: string, details = {}) => ({ type, playerId, ...details });
 
-const shuffle = <T>(items: T[]) => {
-  for (let i = items.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [items[i], items[j]] = [items[j], items[i]];
+function deckFor(gameId: string) {
+  const suits = ['S', 'H', 'D', 'C'] as const;
+  return shuffle(suits.flatMap((suit, suitIndex) => Array.from({ length: 13 }, (_, index) => {
+    const rank = index + 1;
+    return {
+      id: `${gameId}-${suitIndex * 13 + rank}`, rank, suit,
+      label: rank === 1 ? 'A' : rank > 10 ? ['J', 'Q', 'K'][rank - 11] : String(rank),
+      color: suit === 'H' || suit === 'D' ? 'RED' as const : 'BLACK' as const,
+    };
+  })));
+}
+
+const specialCard = (label: string, index: number): PlayingCard => ({
+  id: `EXPLODING_KITTENS-${label}-${index}`, label, rank: 0, suit: 'C', color: label === 'EXPLODING' ? 'RED' : 'BLACK',
+});
+
+function score21(hand: PlayingCard[]) {
+  let total = hand.reduce((sum, card) => sum + Math.min(card.rank, 10), 0);
+  if (total <= 11 && hand.some((card) => card.rank === 1)) total += 10;
+  return total;
+}
+
+function rank21(hand: PlayingCard[], gameId: string) {
+  const total = score21(hand);
+  if (gameId === 'XI_DACH' && hand.length === 2 && hand.every((card) => card.rank === 1)) return 24;
+  if (total === 21 && hand.length === 2) return 23;
+  if (gameId === 'XI_DACH' && hand.length >= 5 && total <= 21) return 22;
+  return total > 21 ? -1 : total;
+}
+
+const xiangqiColor = (index: number): XiangqiColor => index === 0 ? 'RED' : 'BLACK_SIDE';
+const selectedId = (action: CatalogAction) => action.payload?.cardId ?? action.cardId;
+
+function pointOf(value: unknown, rows: number, columns: number): Point | null {
+  if (!value || typeof value !== 'object') return null;
+  const [row, column] = Array.isArray(value) ? value : [(value as Point).row, (value as Point).column];
+  return Number.isInteger(row) && row >= 0 && row < rows && Number.isInteger(column) && column >= 0 && column < columns ? { row, column } : null;
+}
+
+export class CatalogGameEngine implements GameEngine<CatalogState, CatalogAction, unknown> {
+  private readonly gameId: string;
+
+  constructor(gameId: string) {
+    this.gameId = gameId;
   }
-  return items;
-};
 
-export class CatalogGameEngine implements GameEngine<CatalogState, CatalogAction, any> {
-  constructor(private readonly gameId: string) {}
+  private get betting() { return this.gameId === 'POKER' || this.gameId === 'LIENG'; }
+  private get boardGame() { return this.gameId === 'CHESS' || this.gameId === 'CO_TUONG'; }
+  private get twentyOne() { return this.gameId === 'BLACKJACK' || this.gameId === 'XI_DACH'; }
 
-  private get config() { return CONFIG[this.gameId] || CONFIG.TIEN_LEN; }
-
-  private createBoard() {
+  initialize(players: string[]): CatalogState {
+    let deck = HAND_SIZE[this.gameId] ? deckFor(this.gameId) : [];
+    const hands = mapPlayers(players, () => deck.splice(0, HAND_SIZE[this.gameId] || 0));
+    const state: CatalogState = {
+      gameId: this.gameId, players, deck, hands, discardPile: [], currentTurnIndex: 0,
+      winner: null, phase: 'PLAYING', scores: mapPlayers(players, () => this.gameId === 'CO_TY_PHU' ? 1500 : 0),
+      bets: mapPlayers(players, () => 0), folded: mapPlayers(players, () => false), done: mapPlayers(players, () => false),
+      positions: mapPlayers(players, () => 0), dice: null, hasDrawn: mapPlayers(players, () => false),
+      communityCards: [], bettingRound: 'PREFLOP', currentBet: 0, pendingExplosion: mapPlayers(players, () => false),
+    };
+    if (this.betting) initializeBets(state);
+    if (this.gameId === 'BLACKJACK') state.dealerHand = deck.splice(0, 2);
+    if (this.gameId === 'XI_DACH') {
+      state.dealerId = players[0];
+      state.currentTurnIndex = 1;
+    }
+    if (this.gameId === 'PHOM') {
+      hands[players[0]].push(deck.shift()!);
+      state.hasDrawn[players[0]] = true;
+      state.discardCounts = mapPlayers(players, () => 0);
+      state.claimedMelds = mapPlayers(players, () => []);
+    }
+    if (this.gameId === 'MAU_BINH') state.arrangements = {};
     if (this.gameId === 'CHESS') {
-      const major = ['ROOK', 'KNIGHT', 'BISHOP', 'QUEEN', 'KING', 'BISHOP', 'KNIGHT', 'ROOK'];
-      return { board: [major.map((type) => ({ type, color: 'BLACK' as const })), Array.from({ length: 8 }, () => ({ type: 'PAWN', color: 'BLACK' as const })), ...Array.from({ length: 4 }, () => Array(8).fill(null)), Array.from({ length: 8 }, () => ({ type: 'PAWN', color: 'WHITE' as const })), major.map((type) => ({ type, color: 'WHITE' as const }))], boardSize: { rows: 8, columns: 8 } };
+      const chess = new Chess();
+      state.chess = { fen: chess.fen() };
+      state.positionCounts = { [chessKey(chess)]: 1 };
+      state.board = chessBoard(chess);
+      state.boardSize = { rows: 8, columns: 8 };
     }
     if (this.gameId === 'CO_TUONG') {
-      const empty = () => Array(9).fill(null);
-      const board = Array.from({ length: 10 }, empty) as Array<Array<BoardPiece | null>>;
-      const place = (row: number, column: number, type: string, color: 'RED' | 'BLACK_SIDE') => { board[row][column] = { type, color }; };
-      const back = ['ROOK', 'KNIGHT', 'ELEPHANT', 'ADVISOR', 'KING', 'ADVISOR', 'ELEPHANT', 'KNIGHT', 'ROOK'];
-      back.forEach((type, column) => { place(0, column, type, 'BLACK_SIDE'); place(9, column, type, 'RED'); });
-      [1, 7].forEach((column) => { place(2, column, 'CANNON', 'BLACK_SIDE'); place(7, column, 'CANNON', 'RED'); });
-      [0, 2, 4, 6, 8].forEach((column) => { place(3, column, 'PAWN', 'BLACK_SIDE'); place(6, column, 'PAWN', 'RED'); });
-      return { board, boardSize: { rows: 10, columns: 9 } };
+      state.board = xiangqiBoard();
+      state.boardSize = { rows: 10, columns: 9 };
+      state.positionCounts = { [this.boardKey(state)]: 1 };
+      state.moveCount = 0;
     }
-    return {};
+    if (this.gameId === 'CO_CA_NGUA') state.horses = mapPlayers(players, () => [-1, -1, -1, -1]);
+    if (this.gameId === 'CO_TY_PHU') state.properties = {};
+    if (this.gameId === 'EXPLODING_KITTENS') {
+      const actionCards = ['SKIP', 'SHUFFLE', 'SKIP', 'SHUFFLE', 'SKIP', 'SHUFFLE'];
+      deck = shuffle([...deck, ...actionCards.map(specialCard), ...players.slice(1).map((_, i) => specialCard('EXPLODING', i))]);
+      state.deck = deck;
+      players.forEach((id, i) => hands[id].push(specialCard('DEFUSE', i)));
+    }
+    return state;
   }
 
-  private createDeck(): CatalogCard[] {
-    const deck: CatalogCard[] = [];
-    const suits: CatalogCard['suit'][] = ['S', 'H', 'D', 'C'];
-    let id = 0;
-    for (const suit of suits) {
-      for (let rank = 1; rank <= 13; rank += 1) {
-        id += 1;
-        deck.push({ id: `${this.gameId}-${id}`, rank, label: rank === 1 ? 'A' : rank === 11 ? 'J' : rank === 12 ? 'Q' : rank === 13 ? 'K' : String(rank), suit, color: suit === 'H' || suit === 'D' ? 'RED' : 'BLACK' });
+  private advance(state: CatalogState) {
+    for (let offset = 1; offset <= state.players.length; offset++) {
+      const next = (state.currentTurnIndex + offset) % state.players.length;
+      if (!state.done[state.players[next]] && !state.folded[state.players[next]]) {
+        state.currentTurnIndex = next;
+        return;
       }
     }
-    if (this.gameId === 'EXPLODING_KITTENS') {
-      for (let index = 0; index < 4; index += 1) { deck.push({ id: `${this.gameId}-DEFUSE-${index}`, rank: 0, label: 'DEFUSE', suit: 'C', color: 'BLACK' }); deck.push({ id: `${this.gameId}-BOMB-${index}`, rank: 0, label: 'EXPLODING', suit: 'C', color: 'RED' }); }
-    }
-    return shuffle(deck);
   }
 
-  initialize(players: string[], _config: any): CatalogState {
-    const deck = this.createDeck();
-    const hands: Record<string, CatalogCard[]> = {};
-    const scores: Record<string, number> = {};
-    const bets: Record<string, number> = {};
-    const folded: Record<string, boolean> = {};
-    const done: Record<string, boolean> = {};
-    const positions: Record<string, number> = {};
-    const hasDrawn: Record<string, boolean> = {};
-    const acted: Record<string, boolean> = {};
-    const nightActions: Record<string, { type: string; targetUserId?: string }> = {};
-    const pendingExplosion: Record<string, boolean> = {};
-    const roles: Record<string, string> = {};
-    for (const [index, player] of players.entries()) {
-      hands[player] = [];
-      for (let cardIndex = 0; cardIndex < this.config.handSize && deck.length; cardIndex += 1) hands[player].push(deck.shift()!);
-      scores[player] = this.config.startingCoins;
-      bets[player] = 0;
-      folded[player] = false;
-      done[player] = false;
-      positions[player] = 0;
-      hasDrawn[player] = false;
-      acted[player] = false;
-      pendingExplosion[player] = false;
-      if (this.gameId === 'WEREWOLF') roles[player] = index === 0 ? 'WEREWOLF' : index === 1 ? 'SEER' : 'VILLAGER';
+  private finish(state: CatalogState, winners: string[], reason: string) {
+    state.phase = 'FINISHED';
+    state.winners = winners;
+    state.winner = winners.length === 1 ? winners[0] : null;
+    state.endReason = reason;
+  }
+
+  private bestScores(state: CatalogState, lowest = false) {
+    const values = Object.values(state.scores);
+    const best = lowest ? Math.min(...values) : Math.max(...values);
+    return state.players.filter((player) => state.scores[player] === best);
+  }
+
+  private boardKey(state: CatalogState) {
+    return JSON.stringify([state.currentTurnIndex, state.board]);
+  }
+
+  private boardActions(state: CatalogState) {
+    return this.gameId === 'CHESS' ? chessMoves(restoreChess(state)) : xiangqiMoves(state.board!, xiangqiColor(state.currentTurnIndex));
+  }
+
+  private applyBoardMove(state: CatalogState, action: CatalogAction, player: string) {
+    const from = action.payload!.from as Point;
+    const to = action.payload!.to as Point;
+    let notation: string | undefined;
+    if (this.gameId === 'CHESS') {
+      const game = restoreChess(state);
+      state.positionCounts ??= { [chessKey(game)]: 1 };
+      const move = legalChessMove(game, from, to, action.payload?.promotion)!;
+      game.move(move);
+      state.chess = { fen: game.fen() };
+      const key = chessKey(game);
+      state.positionCounts[key] = (state.positionCounts[key] || 0) + 1;
+      state.board = chessBoard(game);
+      notation = move.san;
+      this.advance(state);
+      state.checked = game.isCheck();
+      if (game.isCheckmate()) this.finish(state, [player], 'CHECKMATE');
+      else if (game.isDraw() || state.positionCounts[key] >= 3) this.finish(state, [], game.isStalemate() ? 'STALEMATE' : 'DRAW');
+    } else {
+      state.board![to.row][to.column] = state.board![from.row][from.column];
+      state.board![from.row][from.column] = null;
+      this.advance(state);
+      const color = xiangqiColor(state.currentTurnIndex);
+      state.checked = xiangqiCheck(state.board!, color);
+      const key = this.boardKey(state);
+      state.positionCounts ??= {};
+      state.positionCounts[key] = (state.positionCounts[key] || 0) + 1;
+      state.moveCount = (state.moveCount || 0) + 1;
+      if (!xiangqiMoves(state.board!, color).length) this.finish(state, [player], state.checked ? 'CHECKMATE' : 'NO_LEGAL_MOVES');
+      else if (state.positionCounts[key] >= 3 || state.moveCount >= 300) this.finish(state, [], 'DRAW');
     }
-    const boardSetup = this.createBoard();
+    return event('PIECE_MOVED', player, { from, to, notation });
+  }
+
+  private phomClaim(state: CatalogState, player: string, ids: unknown) {
+    const card = state.discardPile.at(-1);
+    if (!card || !state.lastDiscardBy || state.lastDiscardBy === player || !Array.isArray(ids) || ids.length !== 2 || new Set(ids).size !== 2) return false;
+    const cards = ids.map((id) => state.hands[player].find((item) => item.id === id));
+    const locked = state.claimedMelds?.[player]?.flat() || [];
+    return cards.every((item): item is PlayingCard => Boolean(item && !locked.includes(item.id))) && isMeld([card, ...cards]);
+  }
+
+  private settlePhom(state: CatalogState) {
+    const points = mapPlayers(state.players, (id) => phomPoints(state.hands[id], state.claimedMelds?.[id]));
+    state.scores = mapPlayers(state.players, (id) => points[id].deadwood);
+    const best = Math.min(...state.players.map((id) => points[id].deadwood + (points[id].melds ? 0 : 1000)));
+    this.finish(state, state.players.filter((id) => points[id].deadwood + (points[id].melds ? 0 : 1000) === best), 'PHOM_POINTS');
+  }
+
+  private settleTwentyOne(state: CatalogState) {
+    if (this.gameId === 'BLACKJACK') {
+      state.dealerHand ??= state.deck.splice(0, 2);
+      while (score21(state.dealerHand) < 17 && state.deck.length) state.dealerHand.push(state.deck.shift()!);
+    }
+    const dealer = state.dealerId ?? null;
+    const dealerCards = dealer ? state.hands[dealer] : state.dealerHand!;
+    const dealerRank = rank21(dealerCards, this.gameId);
+    const winners: string[] = [];
+    state.outcomes = {};
+    let dealerWins = 0;
+    for (const player of state.players.filter((id) => id !== dealer)) {
+      const rank = rank21(state.hands[player], this.gameId);
+      const outcome = rank < 0 || rank < dealerRank ? 'LOSS' : rank === dealerRank ? 'PUSH' : 'WIN';
+      state.outcomes[player] = outcome;
+      if (outcome === 'WIN') winners.push(player);
+      if (outcome === 'LOSS') dealerWins++;
+    }
+    if (dealer && dealerWins) winners.push(dealer);
+    state.scores = mapPlayers(state.players, (id) => score21(state.hands[id]));
+    this.finish(state, winners, 'DEALER_SETTLEMENT');
+  }
+
+  private settleMauBinh(state: CatalogState) {
+    const ranks = mapPlayers(state.players, (id) => {
+      const groups = handGroups(state.hands[id], state.arrangements?.[id]) ?? arrangeMauBinh(state.hands[id]);
+      return groups.map(rankHand);
+    });
+    const valid = (id: string) => compareRanks(ranks[id][0], ranks[id][1]) <= 0 && compareRanks(ranks[id][1], ranks[id][2]) <= 0;
+    state.scores = mapPlayers(state.players, () => 0);
+    for (let i = 0; i < state.players.length; i++) for (let j = i + 1; j < state.players.length; j++) {
+      const a = state.players[i];
+      const b = state.players[j];
+      const score = valid(a) === valid(b) ? ranks[a].reduce((sum, rank, group) => sum + Math.sign(compareRanks(rank, ranks[b][group])), 0) :
+        valid(a) ? 3 : -3;
+      const adjusted = !valid(a) && !valid(b) ? 0 : Math.abs(score) === 3 ? score * 2 : score;
+      state.scores[a] += adjusted;
+      state.scores[b] -= adjusted;
+    }
+    this.finish(state, this.bestScores(state), 'MAU_BINH_POINTS');
+  }
+
+  private available(state: CatalogState, player: string) {
+    if (this.isFinished(state) || state.players[state.currentTurnIndex] !== player || state.folded[player] || state.done[player]) return [];
+    if (this.betting) return bettingOptions(state, player).actions;
+    if (this.boardGame) return ['MOVE'];
+    if (this.twentyOne) return [...(state.deck.length && rank21(state.hands[player], this.gameId) < 22 && score21(state.hands[player]) < 21 ? ['HIT'] : []), 'STAND'];
+    switch (this.gameId) {
+      case 'PHOM': return state.hasDrawn[player] ? ['DISCARD'] : [...(state.deck.length ? ['DRAW_CARD'] : []), ...(state.lastDiscardBy ? ['TAKE_DISCARD'] : [])];
+      case 'BAO_CAO':
+      case 'MAU_BINH': return ['SUBMIT_HAND'];
+      case 'EXPLODING_KITTENS': return state.pendingExplosion[player] ? ['DEFUSE'] : ['DRAW_CARD', 'PLAY_CARD'];
+      case 'CO_CA_NGUA': return state.dice && state.horses ? ['MOVE_HORSE'] : ['ROLL_DICE'];
+      case 'CO_TY_PHU': {
+        if (!state.cityDecision) return ['ROLL_DICE'];
+        const cell = CITY_CELLS[state.positions[player] % CITY_CELLS.length];
+        const property = state.properties?.[cell.index];
+        return ['END_TURN', ...(!property && cell.price > 0 && cell.price <= state.scores[player] ? ['BUY'] : []),
+          ...(property?.owner === player && property.level < 3 && state.scores[player] >= Math.floor(cell.price / 2) ? ['UPGRADE'] : [])];
+      }
+      default: return [];
+    }
+  }
+
+  validateAction(state: CatalogState, action: CatalogAction, player: string): boolean {
+    if (!action || !this.available(state, player).includes(action.type)) return false;
+    if (this.betting) return validBet(state, player, action.type, action.payload?.amount ?? action.amount);
+    if (action.type === 'MOVE') {
+      const size = state.boardSize!;
+      const from = pointOf(action.payload?.from, size.rows, size.columns);
+      const to = pointOf(action.payload?.to, size.rows, size.columns);
+      return Boolean(from && to && (this.gameId === 'CHESS' ? legalChessMove(restoreChess(state), from, to, action.payload?.promotion) :
+        legalXiangqiMove(state.board!, from, to, xiangqiColor(state.currentTurnIndex))));
+    }
+    if (action.type === 'MOVE_HORSE') return horseMoves(state.horses!, state.players, player, state.dice!).some(({ index }) => index === action.payload?.index);
+    if (action.type === 'TAKE_DISCARD') return this.phomClaim(state, player, action.payload?.cardIds);
+    if (action.type === 'DISCARD') return state.hands[player].some((card) => card.id === selectedId(action)) &&
+      !(state.claimedMelds?.[player]?.flat().includes(String(selectedId(action))));
+    if (action.type === 'PLAY_CARD') return state.hands[player].some((card) => card.id === selectedId(action) && ['SKIP', 'SHUFFLE'].includes(card.label));
+    if (action.type === 'DEFUSE') {
+      const index = action.payload?.index;
+      return state.hands[player].some((card) => card.label === 'DEFUSE') &&
+        (index === undefined || typeof index === 'number' && Number.isSafeInteger(index) && index >= 0 && index <= state.deck.length);
+    }
+    if (this.gameId === 'MAU_BINH') return Boolean(handGroups(state.hands[player], action.payload?.groups));
+    return true;
+  }
+
+  applyAction(state: CatalogState, action: CatalogAction, player: string) {
+    if (!this.validateAction(state, action, player)) throw new Error('INVALID_ACTION');
+    const next = structuredClone(state);
+    const hand = next.hands[player];
+    const events = [];
+    if (this.betting) {
+      const amount = playBet(next, player, action.type, (action.payload?.amount ?? action.amount) as number | undefined);
+      events.push(event(action.type === 'FOLD' ? 'PLAYER_FOLDED' : 'BET_PLACED', player, { amount, action: action.type }));
+    } else if (this.boardGame) {
+      const size = next.boardSize!;
+      events.push(this.applyBoardMove(next, { ...action, payload: { ...action.payload,
+        from: pointOf(action.payload?.from, size.rows, size.columns)!, to: pointOf(action.payload?.to, size.rows, size.columns)! } }, player));
+    } else if (this.twentyOne) {
+      if (action.type === 'HIT') hand.push(next.deck.shift()!);
+      if (action.type === 'STAND' || rank21(hand, this.gameId) < 0 || score21(hand) === 21 || rank21(hand, this.gameId) >= 22) {
+        next.done[player] = true;
+        if (next.players.every((id) => next.done[id] || next.folded[id])) this.settleTwentyOne(next);
+        else this.advance(next);
+      }
+      events.push(event(action.type, player));
+    } else if (this.gameId === 'PHOM') {
+      next.claimedMelds ??= {};
+      next.discardCounts ??= {};
+      if (action.type === 'DRAW_CARD') {
+        hand.push(next.deck.shift()!);
+        next.hasDrawn[player] = true;
+      } else if (action.type === 'TAKE_DISCARD') {
+        const card = next.discardPile.pop()!;
+        hand.push(card);
+        (next.claimedMelds[player] ??= []).push([card.id, ...(action.payload!.cardIds as string[])]);
+        next.hasDrawn[player] = true;
+      } else {
+        next.discardPile.push(hand.splice(hand.findIndex((card) => card.id === selectedId(action)), 1)[0]);
+        next.lastDiscardBy = player;
+        next.hasDrawn[player] = false;
+        next.discardCounts[player] = (next.discardCounts[player] || 0) + 1;
+        if (phomPoints(hand, next.claimedMelds[player]).deadwood === 0) this.finish(next, [player], 'PHOM_U');
+        else if (!next.deck.length || next.players.every((id) => (next.discardCounts![id] || 0) >= 4)) this.settlePhom(next);
+        else this.advance(next);
+      }
+      events.push(event(action.type, player));
+    } else if (this.gameId === 'MAU_BINH' || this.gameId === 'BAO_CAO') {
+      if (this.gameId === 'MAU_BINH') (next.arrangements ??= {})[player] = action.payload!.groups as string[][];
+      next.done[player] = true;
+      if (next.players.every((id) => next.done[id])) {
+        if (this.gameId === 'MAU_BINH') this.settleMauBinh(next);
+        else {
+          next.scores = mapPlayers(next.players, (id) => next.hands[id].reduce((sum, card) => sum + Math.min(card.rank, 10), 0) % 10);
+          this.finish(next, this.bestScores(next), 'BAO_CAO_POINTS');
+        }
+      } else this.advance(next);
+      events.push(event('HAND_SUBMITTED', player));
+    } else if (this.gameId === 'EXPLODING_KITTENS') {
+      this.playKittens(next, action, player);
+      events.push(event(action.type, player));
+    } else if (this.gameId === 'CO_CA_NGUA') {
+      this.playHorse(next, action, player);
+      events.push(event(action.type, player, { dice: next.dice }));
+    } else if (this.gameId === 'CO_TY_PHU') {
+      this.playCity(next, action.type, player);
+      events.push(event(action.type, player, { dice: next.dice }));
+    }
+    if (this.isFinished(next)) events.push(event('GAME_OVER', player, { winner: next.winner, reason: next.endReason }));
+    return { newState: next, events };
+  }
+
+  private playKittens(state: CatalogState, action: CatalogAction, player: string) {
+    const hand = state.hands[player];
+    if (action.type === 'DEFUSE') {
+      const bomb = hand.splice(hand.findIndex((card) => card.label === 'EXPLODING'), 1)[0];
+      state.discardPile.push(hand.splice(hand.findIndex((card) => card.label === 'DEFUSE'), 1)[0]);
+      if (bomb) state.deck.splice((action.payload?.index as number | undefined) ?? randomInt(state.deck.length + 1), 0, bomb);
+      state.pendingExplosion[player] = false;
+      this.advance(state);
+      return;
+    }
+    if (action.type === 'PLAY_CARD') {
+      const card = hand.splice(hand.findIndex((item) => item.id === selectedId(action)), 1)[0];
+      state.discardPile.push(card);
+      if (card.label === 'SHUFFLE') state.deck = shuffle(state.deck);
+      else this.advance(state);
+      return;
+    }
+    const card = state.deck.shift();
+    if (!card) {
+      this.finish(state, state.players.filter((id) => !state.folded[id]), 'EMPTY_DECK');
+      return;
+    }
+    if (card.label === 'EXPLODING') {
+      if (hand.some((item) => item.label === 'DEFUSE')) {
+        hand.push(card);
+        state.pendingExplosion[player] = true;
+        return;
+      }
+      state.discardPile.push(card);
+      state.folded[player] = true;
+    } else hand.push(card);
+    const alive = state.players.filter((id) => !state.folded[id]);
+    if (alive.length === 1) this.finish(state, alive, 'LAST_PLAYER');
+    else this.advance(state);
+  }
+
+  private playHorse(state: CatalogState, action: CatalogAction, player: string) {
+    const horses = state.horses ??= mapPlayers(state.players, () => [-1, -1, -1, -1]);
+    if (action.type === 'ROLL_DICE') {
+      state.dice = randomInt(6) + 1;
+      if (!horseMoves(horses, state.players, player, state.dice).length) {
+        state.dice = null;
+        this.advance(state);
+      }
+      return;
+    }
+    const die = state.dice!;
+    const { index, destination } = horseMoves(horses, state.players, player, die).find((move) => move.index === action.payload?.index)!;
+    horses[player][index] = destination;
+    if (destination < RACE_LENGTH) {
+      const square = raceSquare(destination, state.currentTurnIndex, state.players.length);
+      state.players.forEach((id, seat) => {
+        if (id !== player) horses[id] = horses[id].map((pos) => pos >= 0 && pos < RACE_LENGTH && raceSquare(pos, seat, state.players.length) === square ? -1 : pos);
+      });
+    }
+    state.dice = null;
+    if (horses[player].every((position) => position === STABLE_FINISH)) this.finish(state, [player], 'ALL_HORSES_HOME');
+    else if (die !== 6) this.advance(state);
+  }
+
+  private playCity(state: CatalogState, type: string, player: string) {
+    const properties = state.properties ??= {};
+    const endTurn = () => {
+      state.cityDecision = false;
+      state.cityTurns = (state.cityTurns || 0) + 1;
+      const alive = state.players.filter((id) => !state.folded[id]);
+      if (alive.length === 1) this.finish(state, alive, 'LAST_PLAYER');
+      else if (state.cityTurns >= state.players.length * 20) {
+        const worth = mapPlayers(alive, (id) => state.scores[id] + CITY_CELLS.reduce((sum, cell) =>
+          sum + (properties[cell.index]?.owner === id ? cell.price + properties[cell.index].level * Math.floor(cell.price / 2) : 0), 0));
+        this.finish(state, alive.filter((id) => worth[id] === Math.max(...Object.values(worth))), 'NET_WORTH');
+      } else this.advance(state);
+    };
+    if (type === 'ROLL_DICE') {
+      state.dice = randomInt(6) + 1 + randomInt(6) + 1;
+      if (state.positions[player] + state.dice >= CITY_CELLS.length) state.scores[player] += 200;
+      state.positions[player] = (state.positions[player] + state.dice) % CITY_CELLS.length;
+    }
+    const cell = CITY_CELLS[state.positions[player] % CITY_CELLS.length];
+    const property = properties[cell.index];
+    if (type === 'BUY') {
+      state.scores[player] -= cell.price;
+      properties[cell.index] = { owner: player, level: 0 };
+    }
+    if (type === 'UPGRADE') {
+      state.scores[player] -= Math.floor(cell.price / 2);
+      property.level++;
+    }
+    if (type !== 'ROLL_DICE') return endTurn();
+    const rent = property && property.owner !== player ? cell.rent * (property.level + 1) : 0;
+    const fee = rent || (cell.index === 12 ? 100 : 0);
+    const balance = state.scores[player];
+    state.scores[player] = Math.max(0, balance - fee) + (cell.index === 18 ? 100 : 0);
+    if (rent) state.scores[property.owner] += Math.min(balance, rent);
+    if (fee > balance) {
+      state.folded[player] = true;
+      for (const tile of CITY_CELLS) if (properties[tile.index]?.owner === player) delete properties[tile.index];
+    }
+    state.cityDecision = Boolean(cell.price && !state.folded[player] && (!property || property.owner === player));
+    if (!state.cityDecision) endTurn();
+  }
+
+  getAiAction(state: CatalogState, player: string, difficulty: 'EASY' | 'MEDIUM' | 'HARD'): CatalogAction | null {
+    const actions = this.available(state, player);
+    if (!actions.length) return null;
+    if (this.boardGame) {
+      const moves = this.boardActions(state);
+      if (!moves.length) return null;
+      if (difficulty === 'EASY') return moves[randomInt(moves.length)];
+      if (difficulty === 'MEDIUM') return shuffle(moves).sort((a, b) => b.priority - a.priority)[0];
+      const ranked = moves.map((move) => {
+        const next = structuredClone(state);
+        this.applyBoardMove(next, move, player);
+        const response = this.isFinished(next) ? 0 : Math.max(0, ...this.boardActions(next).map((reply) => reply.priority));
+        return { move, score: (next.winner === player ? 1000 : move.priority) - response };
+      });
+      return ranked.sort((a, b) => b.score - a.score)[0].move;
+    }
+    if (this.betting) {
+      const options = bettingOptions(state, player);
+      const raise = actions.find((type) => type === 'RAISE' || type === 'BET');
+      if (raise && difficulty === 'HARD' && options.min <= 100 && randomInt(4) === 0) return { type: raise, payload: { amount: options.min } };
+      return { type: actions[0] };
+    }
+    if (this.twentyOne) return { type: actions.includes('HIT') && score21(state.hands[player]) < (difficulty === 'HARD' ? 18 : 17) ? 'HIT' : 'STAND' };
+    if (this.gameId === 'PHOM') {
+      if (!state.hasDrawn[player]) return { type: 'DRAW_CARD' };
+      const card = [...state.hands[player]].sort((a, b) => b.rank - a.rank).find((item) =>
+        !state.claimedMelds?.[player]?.flat().includes(item.id));
+      return { type: 'DISCARD', payload: { cardId: card?.id } };
+    }
+    if (this.gameId === 'MAU_BINH') return { type: 'SUBMIT_HAND', payload: { groups: arrangeMauBinh(state.hands[player]).map((group) => group.map((card) => card.id)) } };
+    if (actions.includes('MOVE_HORSE')) {
+      const moves = horseMoves(state.horses!, state.players, player, state.dice!);
+      return { type: 'MOVE_HORSE', payload: { index: moves.sort((a, b) => b.destination - a.destination)[0].index } };
+    }
+    if (actions.includes('BUY') && state.scores[player] > 250) return { type: 'BUY' };
+    if (actions.includes('UPGRADE') && state.scores[player] > 450) return { type: 'UPGRADE' };
+    return { type: actions[0] };
+  }
+
+  getPublicState(state: CatalogState, player: string) {
+    const { deck, hands, dealerHand, arrangements, chess: _chess, positionCounts: _positions, claimedMelds, ...publicState } = state;
+    const finished = this.isFinished(state);
+    const showdown = finished && (this.gameId === 'MAU_BINH' || this.gameId === 'BAO_CAO' ||
+      this.twentyOne || (this.betting && state.players.filter((id) => !state.folded[id]).length > 1));
+    const availableActions = this.available(state, player);
     return {
-      gameId: this.gameId,
-      players,
-      hands,
-      deck,
-      discardPile: [],
-      currentTurnIndex: 0,
-      phase: this.gameId === 'WEREWOLF' ? 'NIGHT' : 'PLAYING',
-      winner: null,
-      scores,
-      bets,
-      folded,
-      done,
-      positions,
-      dice: null,
-      votes: {},
-      roles: this.gameId === 'WEREWOLF' ? roles : undefined,
-      dealerId: this.gameId === 'XI_DACH' ? players[0] || null : null,
-      passesInRound: 0,
-      hasDrawn,
-      ...boardSetup,
-      communityCards: [],
-      bettingRound: 'PREFLOP',
-      currentBet: this.gameId === 'POKER' ? 20 : 0,
-      acted,
-      nightActions,
-      pendingExplosion
+      ...publicState,
+      deckCount: deck.length,
+      myHand: hands[player] || [],
+      playerCardCounts: mapPlayers(state.players, (id) => hands[id]?.length || 0),
+      availableActions,
+      legalMoves: this.boardGame && availableActions.length ? this.boardActions(state).map(({ payload }) => payload) : [],
+      horseMoves: state.horses && state.dice && availableActions.includes('MOVE_HORSE') ? horseMoves(state.horses, state.players, player, state.dice) : [],
+      cityCells: this.gameId === 'CO_TY_PHU' ? CITY_CELLS : undefined,
+      dealerCards: dealerHand && (finished ? dealerHand : dealerHand.slice(0, 1)),
+      bettingOptions: this.betting && availableActions.length ? bettingOptions(state, player) : undefined,
+      shownHands: showdown ? Object.fromEntries(state.players.filter((id) => !state.folded[id] || this.twentyOne).map((id) => [id, hands[id]])) : undefined,
+      arrangements: finished ? arrangements : undefined,
+      myPhomMelds: claimedMelds?.[player] ?? [],
+      myTotal: this.twentyOne && hands[player] ? score21(hands[player]) : undefined,
     };
   }
 
-  addPlayer(state: CatalogState, playerId: string) {
-    if (state.players.includes(playerId)) return state;
-    const nextState = JSON.parse(JSON.stringify(state)) as CatalogState;
-    nextState.hasDrawn ||= {};
-    nextState.acted ||= {};
-    nextState.nightActions ||= {};
-    nextState.pendingExplosion ||= {};
-    nextState.communityCards ||= [];
-    nextState.currentBet ||= 0;
-    nextState.bettingRound ||= 'PREFLOP';
-    nextState.passesInRound ||= 0;
-    nextState.players.push(playerId);
-    nextState.hands[playerId] = [];
-    nextState.scores[playerId] = this.config.startingCoins;
-    nextState.bets[playerId] = 0;
-    nextState.folded[playerId] = false;
-    nextState.done[playerId] = false;
-    nextState.positions[playerId] = 0;
-    nextState.hasDrawn[playerId] = false;
-    nextState.acted[playerId] = false;
-    nextState.nightActions ||= {};
-    nextState.pendingExplosion ||= {};
-    nextState.pendingExplosion[playerId] = false;
-    if (this.gameId === 'WEREWOLF') nextState.roles = { ...(nextState.roles || {}), [playerId]: 'VILLAGER' };
-    for (let index = 0; index < this.config.handSize && nextState.deck.length; index += 1) nextState.hands[playerId].push(nextState.deck.shift()!);
-    return nextState;
-  }
+  isFinished(state: CatalogState) { return state.phase === 'FINISHED' || Boolean(state.winner); }
 
-  private currentPlayer(state: CatalogState) {
-    return state.players[state.currentTurnIndex];
-  }
-
-  private activePlayers(state: CatalogState) {
-    return state.players.filter((player) => !state.folded[player] && !state.done[player]);
-  }
-
-  private tienLenRank(rank: number) { return rank === 1 ? 14 : rank === 2 ? 15 : rank; }
-
-  private tienLenCombo(cards: CatalogCard[]) {
-    const sorted = [...cards].sort((left, right) => this.tienLenRank(left.rank) - this.tienLenRank(right.rank));
-    const ranks = sorted.map((card) => this.tienLenRank(card.rank));
-    const sameRank = ranks.every((rank) => rank === ranks[0]);
-    if (sorted.length === 1) return { kind: 'SINGLE', power: ranks[0] };
-    if (sorted.length === 2 && sameRank) return { kind: 'PAIR', power: ranks[0] };
-    if (sorted.length === 3 && sameRank) return { kind: 'TRIPLE', power: ranks[0] };
-    if (sorted.length === 4 && sameRank) return { kind: 'FOUR', power: ranks[0] };
-    const isStraight = sorted.length >= 3 && new Set(ranks).size === sorted.length && ranks.every((rank, index) => index === 0 || rank === ranks[index - 1] + 1) && !ranks.includes(15);
-    return isStraight ? { kind: 'STRAIGHT', power: ranks[ranks.length - 1] } : null;
-  }
-
-  private cardsFromAction(state: CatalogState, playerId: string, action: CatalogAction) {
-    const ids = action.payload?.cardIds || (action.payload?.cardId ? [action.payload.cardId] : action.cardId ? [action.cardId] : action.card?.id ? [action.card.id] : []);
-    return ids.map((id: string) => state.hands[playerId]?.find((card) => card.id === id)).filter(Boolean) as CatalogCard[];
-  }
-
-  private boardPlayerColor(state: CatalogState, playerId: string) { return state.players.indexOf(playerId) % 2 === 0 ? (this.gameId === 'CHESS' ? 'WHITE' : 'RED') : (this.gameId === 'CHESS' ? 'BLACK' : 'BLACK_SIDE'); }
-
-  private boardCoords(value: any) { if (Array.isArray(value)) return { row: Number(value[0]), column: Number(value[1]) }; return { row: Number(value?.row), column: Number(value?.column) }; }
-
-  private boardInBounds(state: CatalogState, row: number, column: number) { return Number.isInteger(row) && Number.isInteger(column) && row >= 0 && column >= 0 && row < (state.boardSize?.rows || 0) && column < (state.boardSize?.columns || 0); }
-
-  private boardPathClear(state: CatalogState, from: { row: number; column: number }, to: { row: number; column: number }) { const rowStep = Math.sign(to.row - from.row); const columnStep = Math.sign(to.column - from.column); let row = from.row + rowStep; let column = from.column + columnStep; while (row !== to.row || column !== to.column) { if (state.board?.[row]?.[column]) return false; row += rowStep; column += columnStep; } return true; }
-
-  private validChessMove(state: CatalogState, from: { row: number; column: number }, to: { row: number; column: number }, piece: BoardPiece) {
-    const target = state.board?.[to.row]?.[to.column];
-    if (target?.color === piece.color) return false;
-    const rowDelta = to.row - from.row; const columnDelta = to.column - from.column; const absRow = Math.abs(rowDelta); const absColumn = Math.abs(columnDelta);
-    if (piece.type === 'ROOK') return (rowDelta === 0 || columnDelta === 0) && this.boardPathClear(state, from, to);
-    if (piece.type === 'BISHOP') return absRow === absColumn && this.boardPathClear(state, from, to);
-    if (piece.type === 'QUEEN') return (rowDelta === 0 || columnDelta === 0 || absRow === absColumn) && this.boardPathClear(state, from, to);
-    if (piece.type === 'KNIGHT') return (absRow === 2 && absColumn === 1) || (absRow === 1 && absColumn === 2);
-    if (piece.type === 'KING') return absRow <= 1 && absColumn <= 1 && (absRow + absColumn > 0);
-    if (piece.type === 'PAWN') { const direction = piece.color === 'WHITE' ? -1 : 1; const startRow = piece.color === 'WHITE' ? 6 : 1; if (columnDelta === 0 && !target && rowDelta === direction) return true; if (columnDelta === 0 && !target && from.row === startRow && rowDelta === direction * 2) return !state.board?.[from.row + direction]?.[from.column]; return absColumn === 1 && rowDelta === direction && Boolean(target); }
-    return false;
-  }
-
-  private validXiangqiMove(state: CatalogState, from: { row: number; column: number }, to: { row: number; column: number }, piece: BoardPiece) {
-    const target = state.board?.[to.row]?.[to.column]; if (target?.color === piece.color) return false;
-    const rowDelta = to.row - from.row; const columnDelta = to.column - from.column; const absRow = Math.abs(rowDelta); const absColumn = Math.abs(columnDelta); const sameSide = piece.color === 'RED' ? to.row >= 7 : to.row <= 2;
-    if (piece.type === 'ROOK') return (rowDelta === 0 || columnDelta === 0) && this.boardPathClear(state, from, to);
-    if (piece.type === 'CANNON') { if (rowDelta !== 0 && columnDelta !== 0) return false; let row = from.row + Math.sign(rowDelta); let column = from.column + Math.sign(columnDelta); let blockers = 0; while (row !== to.row || column !== to.column) { if (state.board?.[row]?.[column]) blockers += 1; row += Math.sign(rowDelta); column += Math.sign(columnDelta); } return target ? blockers === 1 : blockers === 0; }
-    if (piece.type === 'KNIGHT') { if (!((absRow === 2 && absColumn === 1) || (absRow === 1 && absColumn === 2))) return false; const leg = absRow === 2 ? { row: from.row + Math.sign(rowDelta), column: from.column } : { row: from.row, column: from.column + Math.sign(columnDelta) }; return !state.board?.[leg.row]?.[leg.column]; }
-    if (piece.type === 'ELEPHANT') { return absRow === 2 && absColumn === 2 && sameSide && !state.board?.[from.row + rowDelta / 2]?.[from.column + columnDelta / 2]; }
-    if (piece.type === 'ADVISOR') return absRow === 1 && absColumn === 1 && sameSide && to.column >= 3 && to.column <= 5;
-    if (piece.type === 'KING') return absRow + absColumn === 1 && sameSide && to.column >= 3 && to.column <= 5;
-    if (piece.type === 'PAWN') { const direction = piece.color === 'RED' ? -1 : 1; const crossedRiver = piece.color === 'RED' ? from.row <= 4 : from.row >= 5; return (rowDelta === direction && columnDelta === 0) || (crossedRiver && rowDelta === 0 && absColumn === 1); }
-    return false;
-  }
-
-  private validBoardMove(state: CatalogState, playerId: string, action: CatalogAction) {
-    if (!state.board || !state.boardSize || state.players[state.currentTurnIndex] !== playerId) return false;
-    const from = this.boardCoords(action.payload?.from); const to = this.boardCoords(action.payload?.to);
-    if (!this.boardInBounds(state, from.row, from.column) || !this.boardInBounds(state, to.row, to.column) || (from.row === to.row && from.column === to.column)) return false;
-    const piece = state.board[from.row]?.[from.column]; if (!piece || piece.color !== this.boardPlayerColor(state, playerId)) return false;
-    return this.gameId === 'CHESS' ? this.validChessMove(state, from, to, piece) : this.validXiangqiMove(state, from, to, piece);
-  }
-
-  private boardMoves(state: CatalogState, playerId: string) {
-    const moves: CatalogAction[] = []; const color = this.boardPlayerColor(state, playerId); const rows = state.boardSize?.rows || 0; const columns = state.boardSize?.columns || 0;
-    for (let fromRow = 0; fromRow < rows; fromRow += 1) for (let fromColumn = 0; fromColumn < columns; fromColumn += 1) if (state.board?.[fromRow]?.[fromColumn]?.color === color) for (let toRow = 0; toRow < rows; toRow += 1) for (let toColumn = 0; toColumn < columns; toColumn += 1) { const action = { type: 'MOVE', payload: { from: { row: fromRow, column: fromColumn }, to: { row: toRow, column: toColumn } } }; if (this.validBoardMove(state, playerId, action)) moves.push(action); }
-    return moves;
-  }
-
-  private hasCard(state: CatalogState, playerId: string, action: CatalogAction) {
-    const requestedId = action.payload?.cardId || action.cardId || action.payload?.card?.id || action.card?.id;
-    return Boolean(requestedId && state.hands[playerId]?.some((card) => card.id === requestedId));
-  }
-
-  getAiAction(state: CatalogState, playerId: string, difficulty: 'EASY' | 'MEDIUM' | 'HARD'): CatalogAction | null {
-    if (this.currentPlayer(state) !== playerId || this.isFinished(state)) return null;
-    if (this.config.category === 'board') { if (['CHESS', 'CO_TUONG'].includes(this.gameId)) return this.boardMoves(state, playerId)[difficulty === 'HARD' ? 0 : Math.floor(Math.random() * Math.max(1, this.boardMoves(state, playerId).length))] || null; return { type: 'ROLL_DICE', payload: {} }; }
-    if (this.gameId === 'PHOM') return state.hasDrawn?.[playerId] ? { type: 'DISCARD', payload: { cardId: state.hands[playerId]?.[0]?.id } } : { type: 'DRAW_CARD', payload: {} };
-    if (this.gameId === 'TIEN_LEN') {
-      const candidates = (state.hands[playerId] || []).map((card) => ({ type: 'PLAY_CARD', payload: { cardIds: [card.id] } }));
-      return candidates.find((candidate) => this.validateAction(state, candidate, playerId)) || { type: 'PASS' };
-    }
-    if (this.gameId === 'POKER' || this.gameId === 'LIENG') return { type: difficulty === 'HARD' ? 'RAISE' : difficulty === 'MEDIUM' ? 'CALL' : 'CHECK', payload: { amount: difficulty === 'HARD' ? 20 : 0 } };
-    if (this.gameId === 'BLACKJACK' || this.gameId === 'XI_DACH') return this.handTotal(state.hands[playerId]) < (difficulty === 'HARD' ? 18 : 16) ? { type: 'HIT' } : { type: 'STAND' };
-    if (state.hands[playerId]?.length) return { type: 'PLAY_CARD', payload: { cardId: state.hands[playerId][0].id } };
-    return { type: this.gameId === 'WEREWOLF' ? 'PASS' : 'DRAW_CARD' };
-  }
-
-  validateAction(state: CatalogState, action: CatalogAction, playerId: string): boolean {
-    if (this.isFinished(state) || !state.players.includes(playerId) || state.folded[playerId] || state.done[playerId]) return false;
-    const freeTurnActions = this.gameId === 'WEREWOLF' && ['VOTE', 'NIGHT_ACTION'].includes(action.type);
-    if (!freeTurnActions && this.currentPlayer(state) !== playerId) return false;
-    if (!action?.type) return false;
-    if (this.gameId === 'WEREWOLF' && action.type === 'VOTE') return state.phase === 'DAY' && Boolean(action.payload?.targetUserId || action.payload?.userId) && state.players.includes(action.payload?.targetUserId || action.payload?.userId);
-    if (this.gameId === 'WEREWOLF' && action.type === 'NIGHT_ACTION') return state.phase === 'NIGHT' && ['WEREWOLF', 'SEER'].includes(state.roles?.[playerId] || '') && Boolean(action.payload?.targetUserId) && state.players.includes(action.payload.targetUserId);
-    if (this.gameId === 'EXPLODING_KITTENS' && action.type === 'DEFUSE') return Boolean(state.pendingExplosion?.[playerId]) && state.hands[playerId]?.some((card) => card.label === 'DEFUSE');
-    if (this.gameId === 'POKER' && action.type === 'CHECK') return state.bets[playerId] === (state.currentBet || 0);
-    if (this.gameId === 'POKER' && ['CALL', 'RAISE', 'BET'].includes(action.type)) return Number(action.payload?.amount ?? action.amount ?? 0) >= 0;
-    if (this.gameId === 'PHOM' && action.type === 'DRAW_CARD') return !state.hasDrawn?.[playerId];
-    if (this.gameId === 'PHOM' && action.type === 'DISCARD') return Boolean(state.hasDrawn?.[playerId]) && this.hasCard(state, playerId, action);
-    if (['CHESS', 'CO_TUONG'].includes(this.gameId) && action.type === 'MOVE') return this.validBoardMove(state, playerId, action);
-    if (['DRAW_CARD', 'HIT', 'STAND', 'CHECK', 'CALL', 'RAISE', 'BET', 'FOLD', 'ROLL_DICE', 'MOVE', 'END_TURN', 'VOTE', 'NIGHT_ACTION', 'CHOOSE_DEALER', 'DEFUSE'].includes(action.type)) return true;
-    if (action.type === 'PASS') return this.gameId !== 'TIEN_LEN' || Boolean(state.lastPlay && state.lastPlay.playerId !== playerId);
-    if (action.type === 'PLAY_CARD' && this.gameId === 'TIEN_LEN') {
-      const cards = this.cardsFromAction(state, playerId, action);
-      const combo = cards.length === (action.payload?.cardIds?.length || (action.payload?.cardId ? 1 : 0)) ? this.tienLenCombo(cards) : null;
-      if (!combo) return false;
-      const previous = state.lastPlay;
-      if (!previous || previous.playerId === playerId) return true;
-      if (combo.kind === previous.kind && cards.length === previous.cards.length) return combo.power > previous.power;
-      return combo.kind === 'FOUR' && previous.kind === 'PAIR' && previous.power === 15;
-    }
-    if (['PLAY_CARD', 'DISCARD', 'SUBMIT_HAND'].includes(action.type)) return this.hasCard(state, playerId, action) || action.type === 'SUBMIT_HAND';
-    return false;
-  }
-
-  private draw(state: CatalogState, playerId: string, count = 1) {
-    for (let index = 0; index < count; index += 1) {
-      if (!state.deck.length && state.discardPile.length > 1) state.deck = shuffle(state.discardPile.splice(0, state.discardPile.length - 1));
-      const card = state.deck.shift();
-      if (card) state.hands[playerId].push(card);
-    }
-  }
-
-  private isSimultaneousRound() { return ['BAO_CAO', 'LIENG', 'MAU_BINH', 'PHOM'].includes(this.gameId); }
-
-  private handScore(hand: CatalogCard[]) {
-    if (this.gameId === 'BAO_CAO') return hand.reduce((sum, card) => sum + (card.rank > 10 ? 0 : card.rank), 0) % 10;
-    if (this.gameId === 'LIENG') { const ranks = hand.map((card) => card.rank).sort((left, right) => left - right); const same = new Set(ranks).size === 1; const straight = ranks.length === 3 && ranks[1] === ranks[0] + 1 && ranks[2] === ranks[1] + 1; return same ? 300 + ranks[0] : straight ? 200 + ranks[2] : 100 + (ranks.reduce((sum, rank) => sum + (rank > 10 ? 10 : rank), 0) % 10); }
-    return hand.reduce((sum, card) => sum + (card.rank > 10 ? 10 : card.rank), 0);
-  }
-
-  private settleSimultaneousRound(state: CatalogState, events: any[]) {
-    if (!this.isSimultaneousRound() || !state.players.every((player) => state.done[player] || state.folded[player])) return false;
-    const winner = state.players.filter((player) => !state.folded[player]).sort((left, right) => this.handScore(state.hands[right]) - this.handScore(state.hands[left]))[0] || null;
-    state.winner = winner;
-    events.push({ type: 'GAME_OVER', winner, scores: Object.fromEntries(state.players.map((player) => [player, this.handScore(state.hands[player])] )) });
-    return true;
-  }
-
-  private settleTwentyOne(state: CatalogState, events: any[]) {
-    if (!['BLACKJACK', 'XI_DACH'].includes(this.gameId) || !state.players.every((player) => state.done[player] || state.folded[player])) return false;
-    const winner = state.players.filter((player) => !state.folded[player]).sort((left, right) => this.handTotal(state.hands[right]) - this.handTotal(state.hands[left]))[0] || null;
-    state.winner = winner;
-    events.push({ type: 'GAME_OVER', winner, scores: Object.fromEntries(state.players.map((player) => [player, this.handTotal(state.hands[player])] )) });
-    return true;
-  }
-
-  private advance(state: CatalogState, events: any[]) {
-    const start = state.currentTurnIndex;
-    for (let offset = 1; offset <= state.players.length; offset += 1) {
-      const nextIndex = (start + offset) % state.players.length;
-      const nextPlayer = state.players[nextIndex];
-      if (!state.folded[nextPlayer] && !state.done[nextPlayer]) { state.currentTurnIndex = nextIndex; return; }
-    }
-    const active = this.activePlayers(state);
-    if (!this.isSimultaneousRound() && active.length === 1) { state.winner = active[0]; events.push({ type: 'GAME_OVER', winner: active[0] }); }
-  }
-
-  private removeSelectedCard(state: CatalogState, playerId: string, action: CatalogAction) {
-    const cardId = action.payload?.cardId || action.cardId || action.payload?.card?.id || action.card?.id;
-    const index = state.hands[playerId].findIndex((card) => card.id === cardId);
-    return index >= 0 ? state.hands[playerId].splice(index, 1)[0] : null;
-  }
-
-  applyAction(state: CatalogState, action: CatalogAction, playerId: string) {
-    const nextState = JSON.parse(JSON.stringify(state)) as CatalogState;
-    nextState.hasDrawn ||= {};
-    nextState.passesInRound ||= 0;
-    const events: any[] = [];
-    nextState.lastAction = { ...action, playerId, at: new Date().toISOString() };
-    switch (action.type) {
-      case 'DRAW_CARD': { const before = nextState.hands[playerId].length; this.draw(nextState, playerId); const drawn = nextState.hands[playerId][before]; events.push({ type: 'CARD_DRAWN', playerId, exploding: drawn?.label === 'EXPLODING' }); if (this.gameId === 'EXPLODING_KITTENS' && drawn?.label === 'EXPLODING') { nextState.pendingExplosion[playerId] = true; if (!nextState.hands[playerId].some((card) => card.label === 'DEFUSE')) { nextState.folded[playerId] = true; nextState.pendingExplosion[playerId] = false; events.push({ type: 'PLAYER_EXPLODED', playerId }); this.advance(nextState, events); } } else if (this.gameId === 'PHOM') nextState.hasDrawn[playerId] = true; else this.advance(nextState, events); break; }
-      case 'HIT': {
-        this.draw(nextState, playerId);
-        const total = this.handTotal(nextState.hands[playerId]);
-        events.push({ type: 'HIT', playerId, total });
-        if (total > 21) { nextState.folded[playerId] = true; this.settleTwentyOne(nextState, events); if (!nextState.winner) this.advance(nextState, events); }
-        else if (!['BLACKJACK', 'XI_DACH'].includes(this.gameId)) this.advance(nextState, events);
-        break;
-      }
-      case 'PLAY_CARD': {
-        const cards = this.gameId === 'TIEN_LEN' ? this.cardsFromAction(nextState, playerId, action) : [this.removeSelectedCard(nextState, playerId, action)].filter(Boolean) as CatalogCard[];
-        cards.forEach((card) => { const index = nextState.hands[playerId].findIndex((item) => item.id === card.id); if (index >= 0) nextState.hands[playerId].splice(index, 1); nextState.discardPile.push(card); });
-        if (this.gameId === 'TIEN_LEN') { const combo = this.tienLenCombo(cards)!; nextState.lastPlay = { playerId, cards, kind: combo.kind, power: combo.power }; nextState.passesInRound = 0; events.push({ type: 'COMBO_PLAYED', playerId, kind: combo.kind, cardCount: cards.length, power: combo.power }); }
-        else if (cards[0]) events.push({ type: 'CARD_PLAYED', playerId, card: cards[0] });
-        if (!nextState.hands[playerId].length && this.gameId !== 'POKER') { nextState.winner = playerId; events.push({ type: 'GAME_OVER', winner: playerId }); } else this.advance(nextState, events);
-        break;
-      }
-      case 'DISCARD': { const card = this.removeSelectedCard(nextState, playerId, action); if (card) nextState.discardPile.push(card); nextState.hasDrawn[playerId] = false; events.push({ type: 'CARD_DISCARDED', playerId }); this.advance(nextState, events); break; }
-      case 'DEFUSE': { const card = nextState.hands[playerId].find((item) => item.label === 'DEFUSE'); const bomb = nextState.hands[playerId].find((item) => item.label === 'EXPLODING'); if (card) nextState.hands[playerId] = nextState.hands[playerId].filter((item) => item.id !== card.id); if (bomb) nextState.hands[playerId] = nextState.hands[playerId].filter((item) => item.id !== bomb.id); if (bomb) nextState.deck.splice(Math.floor(Math.random() * (nextState.deck.length + 1)), 0, bomb); nextState.pendingExplosion[playerId] = false; events.push({ type: 'DEFUSED', playerId }); this.advance(nextState, events); break; }
-      case 'STAND': nextState.done[playerId] = true; events.push({ type: 'STAND', playerId, total: this.handTotal(nextState.hands[playerId]) }); if (!this.settleTwentyOne(nextState, events)) this.advance(nextState, events); break;
-      case 'SUBMIT_HAND': nextState.done[playerId] = true; nextState.scores[playerId] = this.handScore(nextState.hands[playerId]); events.push({ type: 'HAND_SUBMITTED', playerId, score: nextState.scores[playerId] }); if (!this.settleSimultaneousRound(nextState, events)) this.advance(nextState, events); break;
-      case 'BET': case 'CALL': case 'RAISE': case 'CHECK': {
-        const requested = Math.max(0, Number(action.payload?.amount ?? action.amount ?? 0));
-        const amount = this.gameId === 'POKER' ? action.type === 'CALL' ? Math.max(0, (nextState.currentBet || 0) - nextState.bets[playerId]) : ['RAISE', 'BET'].includes(action.type) ? Math.max(1, requested) : 0 : requested;
-        if (this.gameId === 'POKER' && ['RAISE', 'BET'].includes(action.type)) nextState.currentBet = Math.max(nextState.currentBet || 0, nextState.bets[playerId] + amount);
-        nextState.bets[playerId] += amount; nextState.acted[playerId] = true;
-        events.push({ type: 'BET_PLACED', playerId, amount, action: action.type, currentBet: nextState.currentBet });
-        const active = this.activePlayers(nextState);
-        const roundComplete = this.gameId === 'POKER' && active.length > 0 && active.every((player) => nextState.acted[player] && nextState.bets[player] >= (nextState.currentBet || 0));
-        if (roundComplete) {
-          if (nextState.bettingRound === 'PREFLOP') { for (let index = 0; index < 3; index += 1) { const card = nextState.deck.shift(); if (card) nextState.communityCards.push(card); } nextState.bettingRound = 'FLOP'; }
-          else if (nextState.bettingRound === 'FLOP' || nextState.bettingRound === 'TURN') { const card = nextState.deck.shift(); if (card) nextState.communityCards.push(card); nextState.bettingRound = nextState.bettingRound === 'FLOP' ? 'TURN' : 'RIVER'; }
-          else if (nextState.bettingRound === 'RIVER') { nextState.bettingRound = 'SHOWDOWN'; nextState.done = Object.fromEntries(nextState.players.map((player) => [player, true])); }
-          nextState.players.forEach((player) => { nextState.acted[player] = false; nextState.bets[player] = 0; }); nextState.currentBet = 0;
-        }
-        if (this.gameId === 'POKER' && nextState.bettingRound === 'SHOWDOWN') { nextState.winner = active.sort((left, right) => this.handScore(nextState.hands[right].concat(nextState.communityCards)) - this.handScore(nextState.hands[left].concat(nextState.communityCards)))[0] || null; events.push({ type: 'SHOWDOWN', winner: nextState.winner }); }
-        else this.advance(nextState, events);
-        break;
-      }
-      case 'FOLD': nextState.folded[playerId] = true; events.push({ type: 'PLAYER_FOLDED', playerId }); this.advance(nextState, events); break;
-      case 'PASS': case 'END_TURN': {
-        if (this.gameId === 'TIEN_LEN' && nextState.lastPlay) {
-          nextState.passesInRound += 1;
-          if (nextState.passesInRound >= nextState.players.length - 1) { const lastPlayer = nextState.lastPlay.playerId; nextState.lastPlay = undefined; nextState.passesInRound = 0; nextState.currentTurnIndex = Math.max(0, nextState.players.indexOf(lastPlayer)); }
-          else this.advance(nextState, events);
-        } else this.advance(nextState, events);
-        events.push({ type: 'PASS', playerId });
-        break;
-      }
-      case 'ROLL_DICE': { nextState.dice = Math.floor(Math.random() * 6) + 1; nextState.positions[playerId] += nextState.dice; events.push({ type: 'DICE_ROLLED', playerId, dice: nextState.dice, position: nextState.positions[playerId] }); if (nextState.positions[playerId] >= (this.gameId === 'CO_CA_NGUA' ? 56 : 40)) nextState.winner = playerId; else this.advance(nextState, events); break; }
-      case 'MOVE': { if (['CHESS', 'CO_TUONG'].includes(this.gameId)) { const from = this.boardCoords(action.payload?.from); const to = this.boardCoords(action.payload?.to); const piece = nextState.board?.[from.row]?.[from.column]; const captured = nextState.board?.[to.row]?.[to.column]; if (piece && nextState.board) { nextState.board[to.row][to.column] = piece; nextState.board[from.row][from.column] = null; events.push({ type: 'PIECE_MOVED', playerId, from, to, piece: piece.type, captured: captured?.type || null }); if (captured?.type === 'KING') nextState.winner = playerId; else this.advance(nextState, events); } } else { nextState.positions[playerId] += Math.max(1, Number(action.payload?.steps || 1)); events.push({ type: 'PIECE_MOVED', playerId, position: nextState.positions[playerId] }); this.advance(nextState, events); } break; }
-      case 'CHOOSE_DEALER': nextState.dealerId = action.payload?.userId || playerId; events.push({ type: 'DEALER_CHANGED', dealerId: nextState.dealerId }); this.advance(nextState, events); break;
-      case 'VOTE': { const target = action.payload?.targetUserId || action.payload?.userId; nextState.votes[playerId] = target; events.push({ type: 'VOTE_CAST', playerId, target }); const livingPlayers = this.activePlayers(nextState); if (livingPlayers.every((player) => nextState.votes[player])) { const tally: Record<string, number> = {}; Object.values(nextState.votes).forEach((value) => { tally[value] = (tally[value] || 0) + 1; }); const eliminated = Object.entries(tally).sort((left, right) => right[1] - left[1])[0]?.[0]; if (eliminated) { nextState.folded[eliminated] = true; events.push({ type: 'PLAYER_ELIMINATED', playerId: eliminated, reason: 'VOTE' }); } nextState.phase = 'NIGHT'; nextState.votes = {}; nextState.currentTurnIndex = Math.max(0, nextState.players.findIndex((player) => !nextState.folded[player])); events.push({ type: 'DAY_RESOLVED', eliminated: eliminated || null }); } break; }
-      case 'NIGHT_ACTION': { const target = action.payload?.targetUserId || null; nextState.nightActions[playerId] = { type: nextState.roles?.[playerId] || 'NIGHT_ACTION', targetUserId: target }; events.push({ type: 'NIGHT_ACTION', playerId, target }); const livingPlayers = this.activePlayers(nextState); const nightActors = livingPlayers.filter((player) => ['WEREWOLF', 'SEER'].includes(nextState.roles?.[player] || '')); if (nightActors.every((player) => nextState.nightActions[player])) { const wolfTargets = nightActors.filter((player) => nextState.roles?.[player] === 'WEREWOLF').map((player) => nextState.nightActions[player].targetUserId).filter(Boolean); const victim = wolfTargets[0]; if (victim && nextState.players.includes(victim)) { nextState.folded[victim] = true; events.push({ type: 'PLAYER_ELIMINATED', playerId: victim, reason: 'NIGHT' }); } nextState.nightActions = {}; nextState.phase = 'DAY'; nextState.currentTurnIndex = Math.max(0, nextState.players.findIndex((player) => !nextState.folded[player])); events.push({ type: 'NIGHT_RESOLVED', victim: victim || null }); } break; }
-      default: break;
-    }
-    return { newState: nextState, events };
-  }
-
-  private handTotal(hand: CatalogCard[]) { let total = hand.reduce((sum, card) => sum + (card.rank > 10 ? 10 : card.rank), 0); const aces = hand.filter((card) => card.rank === 1).length; for (let index = 0; index < aces && total + 10 <= 21; index += 1) total += 10; return total; }
-
-  getPublicState(state: CatalogState, playerId: string) {
-    const publicHands: Record<string, number> = {};
-    for (const player of state.players) publicHands[player] = state.hands[player]?.length || 0;
-    const publicState: any = { ...state, hands: undefined, deck: undefined, deckCount: state.deck.length, myHand: state.hands[playerId] || [], playerCardCounts: publicHands };
-    if (state.roles) publicState.roles = { [playerId]: state.roles[playerId] };
-    return publicState;
-  }
-
-  isFinished(state: CatalogState) {
-    if (state.winner) return true;
-    if (['BLACKJACK', 'XI_DACH'].includes(this.gameId)) return state.players.every((player) => state.done[player] || state.folded[player]);
-    if (this.isSimultaneousRound()) return state.players.every((player) => state.done[player] || state.folded[player]);
-    return this.activePlayers(state).length <= 1;
-  }
   calculateResult(state: CatalogState) {
-    const winner = ['BLACKJACK', 'XI_DACH'].includes(this.gameId) ? state.players.filter((player) => !state.folded[player]).sort((left, right) => this.handTotal(state.hands[right]) - this.handTotal(state.hands[left]))[0] || null : this.isSimultaneousRound() ? state.players.filter((player) => !state.folded[player]).sort((left, right) => this.handScore(state.hands[right]) - this.handScore(state.hands[left]))[0] || null : state.winner || this.activePlayers(state)[0] || null;
-    return { winner, scores: state.scores, bets: state.bets };
+    return { winner: state.winner, winners: state.winners ?? (state.winner ? [state.winner] : []), scores: state.scores, reason: state.endReason };
   }
 }

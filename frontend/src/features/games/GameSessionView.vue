@@ -1,142 +1,326 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onUnmounted, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useGameStore } from '@/stores/game.store';
-import { GAME_BY_ID } from '@/data/games';
 import { useAuthStore } from '@/stores/auth.store';
-import WerewolfArena from './WerewolfArena.vue';
-import TienLenArena from './TienLenArena.vue';
+import { useRoomStore } from '@/stores/room.store';
+import { useUiStore } from '@/stores/ui.store';
+import { DEMO_ROOMS, GAME_BY_ID } from '@/data/games';
+import ChatBox from '@/components/ChatBox.vue';
+import ArenaBoard from './ArenaBoard.vue';
+import ArenaCard from './ArenaCard.vue';
+import ArenaControls from './ArenaControls.vue';
+import type { createPractice } from './practice';
 
+type Practice = ReturnType<typeof createPractice>;
 const route = useRoute();
 const router = useRouter();
+const roomStore = useRoomStore();
+const ui = useUiStore();
 const gameStore = useGameStore();
-const authStore = useAuthStore();
-const sessionId = computed(() => route.params.sessionId as string);
-const routeGameId = computed(() => sessionId.value.replace(/^demo-/, '').toUpperCase());
-const activeGameId = computed(() => gameStore.session?.game_id || (GAME_BY_ID[routeGameId.value] ? routeGameId.value : 'WEREWOLF'));
-const activeGame = computed(() => GAME_BY_ID[activeGameId.value] || GAME_BY_ID.WEREWOLF);
-const isDemo = computed(() => sessionId.value.startsWith('demo-'));
-const selectedCards = ref<number[]>([]);
-const actionMessage = ref('Đến lượt của bạn · chọn một hành động');
-const showRules = ref(false);
-const now = ref(Date.now());
-const selectedSquare = ref<{ row: number; column: number } | null>(null);
-let clockTimer: ReturnType<typeof setInterval> | undefined;
-const demoHand = ref([
-  { rank: 'A', suit: '♠', tone: 'black' }, { rank: 'K', suit: '♥', tone: 'red' }, { rank: '10', suit: '♣', tone: 'black' }, { rank: '8', suit: '♦', tone: 'red' }, { rank: '7', suit: '♠', tone: 'black' }, { rank: '3', suit: '♥', tone: 'red' }
-]);
-
-const currentState = computed(() => gameStore.gameState as any);
-const myHand = computed(() => isDemo.value ? demoHand.value : currentState.value?.myHand || []);
-const isCardGame = computed(() => activeGame.value.category === 'cards');
-const isBoardGame = computed(() => activeGame.value.category === 'board');
-const isTwentyOne = computed(() => ['BLACKJACK', 'XI_DACH'].includes(activeGameId.value));
-const isBettingGame = computed(() => ['POKER', 'LIENG'].includes(activeGameId.value));
-const isTienLen = computed(() => activeGameId.value === 'TIEN_LEN');
-const isPhom = computed(() => activeGameId.value === 'PHOM');
-const isSubmitGame = computed(() => ['BAO_CAO', 'LIENG', 'MAU_BINH'].includes(activeGameId.value));
-const isWerewolf = computed(() => activeGameId.value === 'WEREWOLF');
-const voteTargets = computed(() => participants.value.filter((participant: any) => participant.id !== authStore.profile?.id));
-const topCard = computed(() => currentState.value?.discardPile?.at(-1) || { rank: 'Q', suit: '♣', tone: 'black' });
-const communityCards = computed(() => currentState.value?.communityCards || []);
-const bettingRoundLabel = computed(() => ({ PREFLOP: 'Pre-flop', FLOP: 'Flop', TURN: 'Turn', RIVER: 'River', SHOWDOWN: 'Showdown' } as Record<string, string>)[String(currentState.value?.bettingRound)] || 'Đang diễn ra');
-const participants = computed(() => gameStore.participants || []);
-const isPlayer = computed(() => isDemo.value || gameStore.isPlayer);
-const isMyTurn = computed(() => isDemo.value || Boolean(authStore.profile?.id && currentState.value?.players?.[currentState.value?.currentTurnIndex] === authStore.profile.id));
-const canAct = computed(() => isPlayer.value && isMyTurn.value);
-const myParticipant = computed(() => participants.value.find((participant: any) => participant.id === authStore.profile?.id));
-const roundLabel = computed(() => `ROUND ${String((currentState.value?.revision || 0) + 1).padStart(2, '0')}`);
-const potValue = computed(() => Object.values(currentState.value?.bets || {}).reduce((sum: number, value: any) => sum + Number(value || 0), 0));
-const actionFeed = computed(() => (currentState.value?.actionLog || []).slice(-4).reverse());
-const elapsedLabel = computed(() => {
-  const startedAt = gameStore.session?.started_at ? new Date(gameStore.session.started_at).getTime() : now.value;
-  const seconds = Math.max(0, Math.floor((now.value - startedAt) / 1000));
-  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+const auth = useAuthStore();
+const sessionId = computed(() => String(route.params.sessionId));
+const practiceMode = computed(() => sessionId.value.startsWith('demo-'));
+const practiceGameId = computed(() => DEMO_ROOMS.find((room) => room.id === sessionId.value)?.game_id || sessionId.value.slice(5).toUpperCase());
+const gameId = computed(() => practiceMode.value ? practiceGameId.value : gameStore.session?.game_id);
+const game = computed(() => GAME_BY_ID[gameId.value]);
+const practice = shallowRef<Practice>();
+const localState = shallowRef<any>();
+const state = computed(() => practiceMode.value ? localState.value : gameStore.gameState);
+const participants = computed(() => practiceMode.value ? practice.value?.participants ?? [] : gameStore.participants);
+const playerId = computed(() => practiceMode.value ? 'practice-player' : auth.profile?.id || '');
+const isPlayer = computed(() => practiceMode.value || gameStore.isPlayer);
+const busy = ref(false);
+const error = ref('');
+const fetched = ref(false);
+const version = ref(0);
+const choice = ref<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
+const playerCount = ref(2);
+const clock = ref(Date.now());
+const clockTimer = setInterval(() => { clock.value = Date.now(); }, 1000);
+const backPath = computed(() => practiceMode.value ? '/practice' : gameStore.session?.room_id && gameStore.session.status !== 'PLAYING' ? `/room/${gameStore.session.room_id}` : '/rooms');
+const boardGame = computed(() => ['CHESS', 'CO_TUONG'].includes(gameId.value));
+const bettingGame = computed(() => ['POKER', 'LIENG'].includes(gameId.value));
+const finished = computed(() => practiceMode.value ? Boolean(state.value && practice.value?.finished()) :
+  (Boolean(gameStore.session && gameStore.session.status !== 'PLAYING') || ['FINISHED', 'GAME_OVER', 'ROUND_END'].includes(state.value?.phase) || Boolean(state.value?.winner)));
+const turn = computed(() => state.value?.currentPlayer || state.value?.players?.[state.value.currentTurnIndex]);
+const deckTop = computed(() => state.value?.discardPile?.at(-1));
+const tableCards = computed<any[]>(() => state.value?.communityCards?.length ? state.value.communityCards :
+  gameId.value === 'TIEN_LEN' ? state.value.lastPlay?.cards ?? [] : deckTop.value ? [deckTop.value] : []);
+const pot = computed(() => Object.values<number>(state.value?.invested ?? state.value?.bets ?? {}).reduce((a, b) => a + b, 0));
+const nameOf = (id: string) => participants.value.find((participant: any) => participant.id === id)?.display_name || 'Người chơi';
+const viewer = computed(() => state.value?.players?.find((player: any) => player.playerId === playerId.value));
+const phaseLabels: Record<string, string> = {
+  NIGHT: 'Ban đêm', DISCUSSION: 'Thảo luận', VOTING: 'Bỏ phiếu', LAST_WORD: 'Lời cuối', GAME_OVER: 'Kết thúc',
+  PREFLOP: 'Pre-flop', FLOP: 'Flop', TURN: 'Turn', RIVER: 'River', SHOWDOWN: 'Mở bài',
+};
+const outcomes: Record<string, string> = { WIN: 'Thắng nhà cái', LOSS: 'Thua nhà cái', PUSH: 'Hòa với nhà cái' };
+const timerLabel = computed(() => {
+  if (!state.value?.phaseEndsAt || finished.value || practiceMode.value) return '';
+  const seconds = Math.max(0, Math.ceil((Date.parse(state.value.phaseEndsAt) - clock.value) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 });
-const board = computed(() => currentState.value?.board || []);
-const pieceGlyph = (piece: any) => { const glyphs: Record<string, string> = { KING: piece?.color === 'RED' || piece?.color === 'WHITE' ? '♔' : '♚', QUEEN: piece?.color === 'WHITE' ? '♕' : '♛', ROOK: piece?.color === 'WHITE' ? '♖' : piece?.color === 'RED' ? '俥' : '車', BISHOP: piece?.color === 'WHITE' ? '♗' : '象', KNIGHT: piece?.color === 'WHITE' ? '♘' : '馬', ELEPHANT: piece?.color === 'RED' ? '相' : '象', ADVISOR: piece?.color === 'RED' ? '仕' : '士', CANNON: piece?.color === 'RED' ? '炮' : '砲', PAWN: piece?.color === 'RED' ? '兵' : piece?.color === 'WHITE' ? '♙' : '卒' }; return glyphs[piece?.type] || '·'; };
-const selectBoardSquare = async (row: number, column: number) => {
-  if (!canAct.value) return;
-  if (!selectedSquare.value) { selectedSquare.value = { row, column }; actionMessage.value = 'Đã chọn quân · chọn ô đích'; return; }
-  const from = selectedSquare.value; selectedSquare.value = null;
-  if (from.row === row && from.column === column) { actionMessage.value = 'Đã bỏ chọn quân'; return; }
-  await sendTableAction('MOVE', { from, to: { row, column } });
-};
+const resultTitle = computed(() => {
+  if (!practiceMode.value && gameStore.session?.status === 'ABANDONED') return state.value?.endReason === 'PLAYER_LEFT' ? 'Ván đã dừng do người chơi rời bàn' : 'Ván đã dừng';
+  if (state.value?.winnerTeam) return state.value.winnerTeam === 'VILLAGE' ? 'Phe Làng thắng' : 'Phe Sói thắng';
+  if (state.value?.outcomes?.[playerId.value]) return outcomes[state.value.outcomes[playerId.value]];
+  const winners: string[] = state.value?.winners ?? (state.value?.winner ? [state.value.winner] : []);
+  if (winners.length > 1) return `Đồng thắng: ${winners.map(nameOf).join(', ')}`;
+  return winners[0] ? (winners[0] === playerId.value ? 'Bạn thắng ván này' : `${nameOf(winners[0])} thắng ván này`) : 'Ván kết thúc hòa';
+});
+const turnLabel = computed(() => {
+  if (finished.value) return 'Ván đã kết thúc';
+  if (gameId.value === 'WEREWOLF') return phaseLabels[state.value?.phase] || 'Đang chia vai';
+  if (turn.value === playerId.value) return 'Đến lượt bạn';
+  return turn.value ? `Lượt của ${nameOf(turn.value)}` : 'Đang chia bàn';
+});
 
-const eventLabel = (event: any) => {
-  const participant = participants.value.find((item: any) => item.id === event.playerId);
-  const name = participant?.display_name || participant?.username || 'Người chơi';
-  if (event.type === 'CARD_PLAYED') return `${name} đã đánh một lá`;
-  if (event.type === 'CARD_DRAWN') return `${name} đã rút bài`;
-  if (event.type === 'BET_PLACED') return `${name} đã ${event.action === 'RAISE' ? 'tố' : 'theo cược'} ${event.amount || 0}`;
-  if (event.type === 'DICE_ROLLED') return `${name} tung xúc xắc ${event.dice || ''}`;
-  if (event.type === 'PLAYER_FOLDED') return `${name} đã bỏ bài`;
-  if (event.type === 'STAND') return `${name} dừng bài`;
-  return `${name} vừa thực hiện ${event.type}`;
+const events: Record<string, string> = {
+  PIECE_MOVED: 'đã đi quân', CARDS_PLAYED: 'đã đánh bài', CARD_PLAYED: 'đã đánh bài', PLAYER_DRAWN: 'đã rút bài',
+  DRAW_CARD: 'đã rút bài', DISCARD: 'đã đánh lá rác', TAKE_DISCARD: 'đã ăn bài', BET_PLACED: 'đã đặt cược',
+  STAND: 'đã dừng bài', HIT: 'đã rút thêm', PLAYER_FOLDED: 'đã úp bài', DEFUSE: 'đã gỡ bom',
+  ROLL_DICE: 'đã tung xúc xắc', MOVE_HORSE: 'đã đi quân', HAND_SUBMITTED: 'đã chốt bài', BUY: 'đã mua đất',
+  UPGRADE: 'đã nâng cấp', END_TURN: 'đã kết thúc lượt', PASS: 'đã bỏ lượt', PLAYER_PASSED: 'đã bỏ lượt',
+  GAME_OVER: 'Ván đã kết thúc', GAME_FINISHED: 'Ván đã kết thúc', DEATH_RECORDED: 'Một người đã bị loại',
+  PLAYER_DIED: 'đã bị loại', VOTE_CAST: 'đã gửi phiếu', PHASE_CHANGED: 'Đã chuyển giai đoạn',
+  VOTE_FINISHED: 'Đã kiểm phiếu', UNO_PENALTY: 'bị phạt hai lá', TRICK_RESET: 'Đã mở vòng mới',
+  GAME_STARTED: 'Ván bắt đầu', DEALT: 'Đã chia bài', PLAYER_FINISHED: 'đã hết bài', HUNTER_TRIGGERED: 'Thợ săn có thể bắn',
 };
+const log = computed<any[]>(() => (gameId.value === 'WEREWOLF' ? state.value?.events ?? [] : state.value?.actionLog ?? state.value?.eventLog ?? []).slice(-12).reverse());
+function historyLine(event: any) {
+  const id = event.playerId ?? event.actorId;
+  const label = events[event.type] || 'Đã cập nhật bàn';
+  return `${id && label[0] === label[0]?.toLowerCase() ? nameOf(id) + ' ' : ''}${label}${event.notation ? ' · ' + event.notation : ''}${event.amount ? ' · ' + event.amount + ' chip' : ''}`;
+}
+function participantInfo(p: any) {
+  const info = state.value?.players?.find((entry: any) => entry.playerId === p.id);
+  if (gameId.value === 'WEREWOLF') return [info?.alive ? 'Đang sống' : 'Đã bị loại', info?.roleName].filter(Boolean).join(' · ');
+  if (state.value?.folded?.[p.id]) return 'Đã bị loại';
+  if (bettingGame.value && state.value?.stacks) return `${state.value.stacks[p.id]} chip`;
+  if (gameId.value === 'CO_TY_PHU') return `${state.value?.scores?.[p.id] ?? 0} xu`;
+  if (info?.rank) return `Hạng ${info.rank}`;
+  const cards = info?.cardsCount ?? state.value?.playerCardCounts?.[p.id];
+  if (cards > 0) return `${cards} lá`;
+  return p.is_ai ? 'Máy' : p.id === playerId.value ? 'Bạn' : 'Người chơi';
+}
 
-onMounted(async () => {
-  clockTimer = setInterval(() => { now.value = Date.now(); }, 1000);
-  if (!isDemo.value) {
-    try {
-      await gameStore.fetchGameState(sessionId.value);
-      gameStore.subscribeToSession(sessionId.value);
-    } catch { actionMessage.value = 'Kết nối bàn tạm thời gián đoạn · đang ở chế độ xem'; }
+const racePositions = computed(() => {
+  const map: Record<number, string[]> = {};
+  if (gameId.value !== 'CO_CA_NGUA') return map;
+  const players: string[] = state.value?.players || [];
+  players.forEach((id, seat) => (state.value?.horses?.[id] || []).forEach((progress: number, index: number) => {
+    if (progress >= 0 && progress < 48) (map[(progress + seat * 48 / players.length) % 48] ??= []).push(`${seat + 1}·${index + 1}`);
+  }));
+  return map;
+});
+
+async function startPractice() {
+  if (!game.value) return;
+  const current = sessionId.value;
+  busy.value = true;
+  error.value = '';
+  try {
+    const module = await import('./practice');
+    if (sessionId.value !== current) return;
+    practice.value = module.createPractice(gameId.value, playerCount.value, choice.value);
+    localState.value = practice.value.view();
+    version.value++;
+  } catch (cause: any) {
+    error.value = cause.message || 'Không thể mở bàn luyện tập.';
+  } finally { if (sessionId.value === current) busy.value = false; }
+}
+
+async function connect() {
+  const current = sessionId.value;
+  error.value = '';
+  fetched.value = false;
+  gameStore.subscribeToSession(current);
+  try {
+    await gameStore.fetchGameState(current);
+  } catch (cause: any) {
+    if (current === sessionId.value) error.value = cause.message || 'Không thể kết nối bàn.';
+  } finally {
+    if (current === sessionId.value) fetched.value = true;
   }
-});
+}
 
-onUnmounted(() => { if (clockTimer) clearInterval(clockTimer); if (!isDemo.value) gameStore.unsubscribeFromSession(); });
+watch(sessionId, () => {
+  gameStore.unsubscribeFromSession();
+  error.value = '';
+  busy.value = false;
+  practice.value = undefined;
+  localState.value = undefined;
+  if (!practiceMode.value) { void connect(); return; }
+  if (game.value) playerCount.value = Math.max(2, game.value.minPlayers);
+  void startPractice();
+}, { immediate: true });
 
-const chooseCard = (index: number | string) => { const cardIndex = Number(index); if (isTienLen.value) selectedCards.value = selectedCards.value.includes(cardIndex) ? selectedCards.value.filter((item) => item !== cardIndex) : [...selectedCards.value, cardIndex].sort((left, right) => left - right); else selectedCards.value = selectedCards.value[0] === cardIndex ? [] : [cardIndex]; actionMessage.value = selectedCards.value.length ? `Đã chọn ${selectedCards.value.length} lá · xác nhận để đánh` : 'Đến lượt của bạn · chọn một hành động'; };
-const drawCard = async () => {
-  if (!isDemo.value) { try { await gameStore.playAction(sessionId.value, { type: 'DRAW_CARD' }); } catch { actionMessage.value = 'Nước đi chưa hợp lệ'; } return; }
-  demoHand.value.push({ rank: '5', suit: '♦', tone: 'red' }); actionMessage.value = 'Bạn đã rút 1 lá · lượt vẫn được giữ';
-};
-const sendTienLenAction = async (action: any) => {
-  if (isDemo.value) { actionMessage.value = 'Hành động Tiến Lên demo đã được ghi nhận'; return; }
-  try { await gameStore.playAction(sessionId.value, action); actionMessage.value = 'Nước đi đã được ghi nhận · máy chủ đang kiểm tra luật'; } catch (error: any) { actionMessage.value = error.message || 'Nước đi chưa hợp lệ'; }
-};
-const sendWerewolfAction = async (action: any) => {
-  if (isDemo.value) { actionMessage.value = 'Hành động Ma Sói demo đã được ghi nhận'; return; }
-  try { await gameStore.playAction(sessionId.value, action); actionMessage.value = 'Hành động đã được ghi nhận · máy chủ đang phân giải'; } catch (error: any) { actionMessage.value = error.message || 'Hành động chưa hợp lệ'; }
-};
-const sendTableAction = async (type: string, payload: any = {}) => {
-  if (isDemo.value) { actionMessage.value = type === 'ROLL_DICE' ? 'Bạn vừa tung xúc xắc · lượt demo đã cập nhật' : 'Hành động demo đã được ghi nhận'; return; }
-  try { await gameStore.playAction(sessionId.value, { type, payload }); actionMessage.value = 'Nước đi đã được ghi nhận · bàn đang đồng bộ'; } catch (error: any) { actionMessage.value = error.message || 'Nước đi chưa hợp lệ'; }
-};
+watch(() => gameStore.session?.id, (id) => { if (id === sessionId.value) error.value = ''; });
 
-const playCard = async () => {
-  if (!selectedCards.value.length) { actionMessage.value = 'Chọn ít nhất một lá trước khi xác nhận'; return; }
-  if (!isDemo.value) { const cards = selectedCards.value.map((index) => myHand.value[index]); const actionType = isPhom.value ? 'DISCARD' : 'PLAY_CARD'; try { await gameStore.playAction(sessionId.value, { type: actionType, payload: isTienLen.value ? { cardIds: cards.map((card: any) => card.id) } : { cardId: cards[0].id, card: cards[0] } }); selectedCards.value = []; } catch (error: any) { actionMessage.value = error.message || 'Tổ hợp này chưa thể đánh'; } return; }
-  demoHand.value = demoHand.value.filter((_card, index) => !selectedCards.value.includes(index)); selectedCards.value = []; actionMessage.value = 'Nước đi đã được ghi nhận · đối thủ đang suy nghĩ';
-};
+async function act(action: any) {
+  if (busy.value || finished.value || !isPlayer.value) return;
+  const current = sessionId.value;
+  busy.value = true;
+  error.value = '';
+  try {
+    if (practiceMode.value && practice.value) {
+      practice.value.play(action);
+      localState.value = practice.value.view();
+    } else await gameStore.playAction(current, action);
+  } catch (cause: any) {
+    if (current === sessionId.value) error.value = cause.message || 'Nước đi này chưa hợp lệ.';
+  } finally {
+    if (current === sessionId.value) busy.value = false;
+  }
+}
+
+async function leaveActiveRoom() {
+  const roomId = gameStore.session?.room_id;
+  if (!roomId || !await ui.confirmAction('Rời bàn sẽ dừng ván đang chơi và hoàn phí vào ví.', { title: 'Rời bàn chơi', confirmLabel: 'Rời bàn' })) return;
+  busy.value = true;
+  try {
+    await roomStore.leaveRoom(roomId);
+    await router.push('/rooms');
+  } catch (cause: any) {
+    error.value = cause.message || 'Không thể rời bàn.';
+  } finally { busy.value = false; }
+}
+
+onUnmounted(() => { clearInterval(clockTimer); gameStore.unsubscribeFromSession(); });
 </script>
 
 <template>
-  <TienLenArena v-if="isTienLen" :state="currentState" :participants="participants" :is-player="isPlayer" :my-player-id="authStore.profile?.id" :is-demo="isDemo" @action="sendTienLenAction" />
-  <WerewolfArena v-else-if="isWerewolf" :state="currentState" :participants="participants" :is-player="isPlayer" :my-player-id="authStore.profile?.id" :is-demo="isDemo" @action="sendWerewolfAction" />
-  <div v-else class="arena-page">
-    <header class="arena-header"><div class="arena-brand"><button @click="router.push('/rooms')" class="back-button"><i class="bi bi-arrow-left"></i></button><div class="brand-glyph-small"><i class="bi bi-diamond-half"></i></div><div><strong>LuNu Arena</strong><small>{{ activeGame.name }} · {{ isDemo ? 'Bàn mẫu' : `Session ${sessionId.slice(0, 8)}` }}</small></div></div><div class="arena-center-status"><span class="live-dot"></span><strong>Trực tiếp</strong><span v-if="!isPlayer" class="spectator-badge"><i class="bi bi-eye me-1"></i>Khán giả</span><span>{{ roundLabel }}</span><span class="status-divider"></span><span>{{ elapsedLabel }}</span></div><div class="arena-actions"><button class="arena-icon"><i class="bi bi-volume-up"></i></button><button class="arena-icon" @click="showRules = !showRules"><i class="bi bi-journal-text"></i></button><button class="leave-arena" @click="router.push('/rooms')">Rời bàn</button></div></header>
-    <div class="arena-layout">
-      <main class="arena-board-wrap"><div class="arena-table" :class="activeGame.category"><div class="arena-table-inner"><div class="table-ring"></div><div v-for="(participant, index) in participants.filter((item: any) => item.id !== authStore.profile?.id).slice(0, 3)" :key="participant.id" class="opponent" :class="`opponent-${index === 0 ? 'top' : index === 1 ? 'left' : 'right'}`"><div class="opponent-avatar">{{ (participant.display_name || participant.username || 'P').slice(0, 1).toUpperCase() }}</div><div><strong>{{ participant.display_name || participant.username }}</strong><small><span v-if="participant.is_ai" class="mini-live"></span>{{ participant.is_ai ? 'Trợ lý AI' : `Ghế ${participant.seat_index || index + 1}` }}</small></div><span class="opponent-count">{{ currentState?.playerCardCounts?.[participant.id] || 0 }} <small>lá</small></span></div><div class="board-center">
-<div v-if="isCardGame" class="card-piles"><div class="deck-stack"><span></span><span></span><div class="back-card"><i class="bi bi-diamond-half"></i></div><small>{{ isBettingGame ? bettingRoundLabel : 'RÚT BÀI' }}</small></div><div class="center-separator"><span></span><i class="bi bi-arrow-right"></i><span></span></div><div v-if="isBettingGame && communityCards.length" class="community-cards"><div v-for="card in communityCards" :key="card.id" class="playing-card community-card" :class="card.color === 'RED' ? 'red' : 'black'"><span>{{ card.label }}</span><strong>{{ card.suit }}</strong></div></div><div v-else class="playing-card face-up" :class="topCard.tone"><span>{{ topCard.rank }}</span><strong>{{ topCard.suit }}</strong><small>{{ topCard.rank }}</small></div></div><div v-else-if="isBoardGame && ['CHESS', 'CO_TUONG'].includes(activeGameId)" class="board-game-center"><div class="live-board" :class="activeGameId === 'CO_TUONG' ? 'xiangqi-board' : 'chess-board'"><template v-for="(row, rowIndex) in board" :key="rowIndex"><button v-for="(piece, columnIndex) in row" :key="`${rowIndex}-${columnIndex}`" class="board-square" :class="[{ selected: selectedSquare?.row === Number(rowIndex) && selectedSquare?.column === Number(columnIndex) }, (Number(rowIndex) + Number(columnIndex)) % 2 ? 'dark-square' : 'light-square']" @click="selectBoardSquare(Number(rowIndex), Number(columnIndex))" :disabled="!canAct">{{ pieceGlyph(piece) }}</button></template></div><strong>{{ activeGame.name }}</strong><small>{{ canAct ? 'Chọn quân rồi chọn ô đích' : 'Đang chờ lượt đối thủ' }}</small></div><div v-else class="board-game-center"><div class="board-emblem"><i :class="`bi ${activeGame.icon}`"></i></div><strong>{{ activeGame.name }}</strong><small>{{ isBoardGame ? 'Bàn đang đồng bộ' : 'Đêm đầu tiên · thảo luận mở' }}</small></div><div class="pot-display"><small>{{ isCardGame ? 'POT HIỆN TẠI' : 'TRẠNG THÁI' }}</small><strong>{{ isCardGame ? `${potValue.toLocaleString('vi-VN')} xu` : 'ĐANG DIỄN RA' }}</strong></div></div><div class="turn-message"><span class="turn-dot"></span>{{ !isPlayer ? 'Bạn đang theo dõi · chỉ chủ ghế mới có thể thao tác' : canAct ? actionMessage : 'Đang chờ lượt của người chơi khác' }}</div><div class="opponent opponent-bottom"><div class="my-avatar">{{ (myParticipant?.display_name || authStore.profile?.display_name || 'B').slice(0, 1).toUpperCase() }}</div><div><strong>{{ myParticipant?.display_name || authStore.profile?.display_name || 'Bạn' }}</strong><small>{{ isCardGame ? `${myHand.length} lá trên tay` : 'Ghế của bạn' }}</small></div><span class="my-balance">{{ isPlayer ? 'PLAYER' : 'SPECTATOR' }}</span></div>
-</div></div><div class="arena-bottom-bar"><div class="bottom-stat"><i class="bi bi-shield-check"></i><span><strong>Bàn công bằng</strong><small>Kết quả được xác thực</small></span></div><div class="bottom-stat"><i class="bi bi-wifi"></i><span><strong>{{ gameStore.realtimeStatus === 'SUBSCRIBED' ? 'Realtime ổn định' : 'Đang kết nối' }}</strong><small>{{ gameStore.realtimeStatus }}</small></span></div><div class="bottom-help ms-auto"><i class="bi bi-lightbulb"></i> Gợi ý nước đi đang tắt</div></div>
-      </main>
-      <aside class="arena-side-panel"><div class="side-panel-header"><div><div class="eyebrow">Ván đang diễn ra</div><h2>{{ activeGame.name }}</h2></div><span class="round-chip">{{ isPlayer ? 'PLAYER' : 'SPECTATOR' }}</span></div>
-<div class="score-line"><span>Pot / cược hiện tại</span><strong class="text-gold">{{ potValue.toLocaleString('vi-VN') }} xu</strong></div><div class="score-line"><span>Người trong session</span><strong>{{ participants.length }}</strong></div><div class="panel-divider"></div><div v-if="!isPlayer" class="action-panel spectator-panel"><div class="action-title"><span>Chế độ khán giả</span><small>Realtime</small></div><p>Bàn đang mở theo dõi trực tiếp. Ghế trống sẽ tự động nhận người thật khi bạn vào bàn.</p></div><div v-else-if="isCardGame" class="action-panel"><div class="action-title"><span>{{ isTwentyOne ? 'Quyết định ván bài' : isBettingGame ? 'Vòng cược hiện tại' : isPhom ? 'Rút và đánh bài' : isSubmitGame ? 'Chốt tay đồng thời' : 'Lá bài của bạn' }}</span><small>{{ myHand.length }} lá</small></div><div v-if="!isTwentyOne && !isBettingGame" class="hand-preview"><button v-for="(card, index) in myHand.slice(0, 4)" :key="index" class="mini-card" :class="card.tone" @click="chooseCard(index)" :disabled="!canAct"><span>{{ card.rank }}</span><strong>{{ card.suit }}</strong></button><span v-if="myHand.length > 4" class="more-cards">+{{ myHand.length - 4 }}</span></div><div v-if="isTwentyOne" class="action-buttons"><button class="btn action-primary" @click="sendTableAction('HIT')" :disabled="!canAct"><i class="bi bi-plus-circle me-2"></i>Rút thêm</button><button class="btn action-secondary" @click="sendTableAction('STAND')" :disabled="!canAct"><i class="bi bi-hand-thumbs-up me-2"></i>Dừng bài</button></div><div v-else-if="isBettingGame" class="action-buttons"><button class="btn action-primary" @click="sendTableAction('CALL', { amount: 50 })" :disabled="!canAct"><i class="bi bi-check2-circle me-2"></i>Theo cược</button><button class="btn action-secondary" @click="sendTableAction('RAISE', { amount: 100 })" :disabled="!canAct"><i class="bi bi-graph-up-arrow me-2"></i>Tố 100</button><button class="btn action-secondary" @click="sendTableAction('FOLD')" :disabled="!canAct"><i class="bi bi-x-circle me-2"></i>Bỏ bài</button></div><div v-else-if="isSubmitGame" class="action-buttons"><button class="btn action-primary w-100" @click="sendTableAction('SUBMIT_HAND')" :disabled="!canAct"><i class="bi bi-send-check me-2"></i>Chốt tay và mở bài</button></div><div v-else class="action-buttons"><button class="btn action-primary" @click="playCard" :disabled="!canAct || !selectedCards.length"><i class="bi bi-hand-index-thumb me-2"></i>{{ isPhom ? 'Đánh lá rác' : 'Đánh lá đã chọn' }}</button><button class="btn action-secondary" @click="drawCard" :disabled="!canAct"><i class="bi bi-plus-lg me-2"></i>Rút một lá</button></div></div><div v-else-if="isBoardGame" class="action-panel board-action"><div class="action-title"><span>Điều khiển bàn cờ</span><small>Server-authoritative</small></div><div class="ai-option"><span class="ai-icon"><i class="bi bi-stars"></i></span><div><strong>Gợi ý nước đi</strong><small>Đề xuất chiến thuật theo trình độ</small></div><i class="bi bi-toggle-on text-mint ms-auto fs-5"></i></div><button class="btn action-primary w-100 mt-3" @click="sendTableAction('ROLL_DICE')" :disabled="!canAct">
-<i class="bi bi-dice-5 me-2"></i>Tung xúc xắc</button><button class="btn action-secondary w-100 mt-2" @click="sendTableAction('MOVE', { steps: 1 })" :disabled="!canAct">
-<i class="bi bi-arrow-right me-2"></i>Di chuyển 1 ô</button></div><div v-else class="action-panel board-action"><div class="action-title"><span>Điều khiển social</span><small>Server-authoritative</small></div><div class="ai-option"><span class="ai-icon"><i class="bi bi-moon-stars"></i></span><div><strong>Hành động theo vai trò</strong><small>Thảo luận, bỏ phiếu hoặc qua lượt</small></div></div><div v-if="isWerewolf" class="vote-grid"><button v-for="target in voteTargets" :key="target.id" class="btn action-secondary w-100 mt-2" @click="sendTableAction('VOTE', { targetUserId: target.id })" :disabled="!canAct"><i class="bi bi-person-x me-2"></i>{{ target.display_name || target.username }}</button></div><button v-else class="btn action-primary w-100 mt-3" @click="sendTableAction('PASS')" :disabled="!canAct"><i class="bi bi-skip-forward me-2"></i>Qua lượt</button><button v-if="isWerewolf" class="btn action-secondary w-100 mt-2" @click="sendTableAction('PASS')" :disabled="!canAct">
-<i class="bi bi-skip-forward me-2"></i>Qua lượt</button></div><div class="panel-divider"></div><div class="activity-feed"><div class="action-title"><span>Nhật ký bàn</span><small>{{ currentState?.actionLog?.length || 0 }} sự kiện</small></div><div v-for="(event, index) in actionFeed" :key="`${event.at}-${index}`" class="feed-item"><span class="feed-avatar" :class="index === 0 ? 'gold' : 'mint'">{{ (participants.find((item: any) => item.id === event.playerId)?.display_name || 'L').slice(0, 1).toUpperCase() }}</span><span>{{ eventLabel(event) }}</span><small>{{ event.automated ? 'AI' : 'LIVE' }}</small></div><div v-if="!actionFeed.length" class="feed-empty">Chưa có hành động nào được ghi nhận.</div></div><div class="spectator-note"><i class="bi bi-people"></i><span><strong>{{ participants.length }} người</strong> đang ở trong session này</span></div></aside>
+  <main class="arena-root" :style="{ '--game-accent': game?.accent || '#e6c085' }">
+    <header class="arena-top">
+      <RouterLink :to="backPath" class="arena-brand"><i class="bi bi-diamond-half" aria-hidden="true"></i><span>LuNu</span><small>{{ practiceMode ? 'Sảnh luyện tập' : 'Sảnh trực tuyến' }}</small></RouterLink>
+      <div class="arena-nav-actions"><div class="connection"><span aria-hidden="true"></span>{{ practiceMode ? 'Chơi với máy' : gameStore.realtimeStatus === 'SUBSCRIBED' ? 'Trực tuyến' : 'Đồng bộ định kỳ' }}</div><button v-if="!practiceMode && state && isPlayer && !finished" class="btn btn-quiet" :disabled="busy" @click="leaveActiveRoom">Rời bàn</button></div>
+    </header>
+    <section v-if="!state" class="arena-empty">
+      <h1>{{ game?.name ?? (practiceMode ? 'Bàn không có trong danh mục' : 'Bàn trực tuyến') }}</h1>
+      <p v-if="error" role="alert">{{ error }}</p>
+      <p v-else-if="busy || !practiceMode && !fetched">Đang mở bàn…</p>
+      <button v-if="error && !practiceMode" class="btn btn-gold" @click="connect">Thử lại</button>
+      <button v-if="error && practiceMode" class="btn btn-gold" @click="startPractice">Thử lại</button>
+      <RouterLink v-if="practiceMode && !game" class="btn btn-gold" to="/practice">Chọn trò chơi</RouterLink>
+    </section>
+    <div v-else class="arena-content">
+      <div class="match-heading">
+        <div><p class="match-mode"><i :class="`bi ${game?.icon || 'bi-controller'}`" aria-hidden="true"></i> {{ practiceMode ? 'Bàn luyện tập' : isPlayer ? 'Người chơi' : 'Khán giả' }}</p><h1>{{ game?.name || 'Bàn chơi' }}</h1></div>
+        <div class="turn-banner" role="status"><i class="bi bi-circle-fill" aria-hidden="true"></i>{{ turnLabel }}<strong v-if="timerLabel">{{ timerLabel }}</strong></div>
+      </div>
+
+      <p v-if="error" class="arena-error" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> {{ error }}</p>
+      <section v-if="finished" class="arena-result" aria-live="polite">
+        <i class="bi bi-trophy" aria-hidden="true"></i><div><h2>{{ resultTitle }}</h2><p v-if="state.endReason === 'CHECKMATE'">Chiếu hết</p><p v-else-if="state.endReason === 'STALEMATE'">Hết nước đi hợp lệ</p></div>
+        <button v-if="practiceMode" class="btn btn-gold" @click="startPractice">Chơi lại</button>
+        <RouterLink v-else :to="backPath" class="btn btn-gold">Về phòng</RouterLink>
+      </section>
+
+      <div class="arena-grid">
+        <div class="arena-table" :class="{ 'night-table': gameId === 'WEREWOLF' }">
+          <div class="table-seats">
+            <article v-for="p in participants" :key="p.id" class="arena-seat" :class="{ current: turn === p.id && !finished, mine: p.id === playerId }">
+              <img v-if="p.avatar_url" :src="p.avatar_url" alt="">
+              <span v-else class="initial" aria-hidden="true">{{ p.display_name.slice(0, 1) }}</span>
+              <div><strong>{{ p.display_name }}</strong><small>{{ participantInfo(p) }}</small></div>
+            </article>
+          </div>
+
+          <ArenaBoard v-if="boardGame" :game-id="gameId" :state="state" :busy="busy || finished || !isPlayer" @action="act"/>
+          <div v-else-if="gameId === 'WEREWOLF'" class="werewolf-table">
+            <i class="bi bi-moon-stars" aria-hidden="true"></i>
+            <strong>{{ phaseLabels[state.phase] }}</strong>
+            <p>Ngày {{ state.day }} · Đêm {{ state.night }}</p>
+            <p v-if="viewer?.roleName" class="role-label">Vai của bạn · {{ viewer.roleName }}</p>
+          </div>
+          <div v-else-if="gameId === 'CO_CA_NGUA'" class="race-table">
+            <p v-if="state.dice" class="dice"><i class="bi bi-dice-5" aria-hidden="true"></i> {{ state.dice }}</p>
+            <div class="race-track" aria-label="Đường đua cá ngựa">
+              <div v-for="cell in 48" :key="cell" :class="{ marked: racePositions[cell - 1]?.length }"><small>{{ cell }}</small><strong>{{ racePositions[cell - 1]?.join(' ') }}</strong></div>
+            </div>
+            <p v-for="(positions, id) in state.horses" :key="id" class="horse-stable"><strong>{{ nameOf(String(id)) }}</strong> <span>{{ positions.filter((pos: number) => pos < 0).length }} trong chuồng · {{ positions.filter((pos: number) => pos === 53).length }}/4 về đích</span></p>
+          </div>
+          <div v-else-if="gameId === 'CO_TY_PHU'" class="city-table">
+            <p v-if="state.dice" class="dice"><i class="bi bi-dice-5" aria-hidden="true"></i> {{ state.dice }}</p>
+            <div class="city-grid" aria-label="Bàn cờ thành phố">
+              <div v-for="cell in state.cityCells" :key="cell.index" :class="{ owned: state.properties?.[cell.index] }">
+                <strong>{{ cell.name }}</strong>
+                <small v-if="state.properties?.[cell.index]">{{ nameOf(state.properties[cell.index].owner) }} · cấp {{ state.properties[cell.index].level + 1 }}</small>
+                <small v-else-if="cell.price">{{ cell.price }} xu</small>
+                <span v-for="id in state.players.filter((id: string) => !state.folded[id] && state.positions[id] === cell.index)" :key="id" class="city-token">{{ nameOf(id) }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-else class="felt-center">
+            <div v-if="bettingGame" class="pot"><strong>{{ pot }} chip</strong><span>{{ gameId === 'POKER' ? phaseLabels[state.bettingRound] : 'Tiền cược trong bàn' }}</span></div>
+            <div v-else-if="state.dealerId || state.dealerCards" class="pot"><strong>{{ state.dealerId ? nameOf(state.dealerId) : 'Nhà cái' }}</strong><span>Nhà cái</span></div>
+            <div class="table-cards">
+              <div v-if="!bettingGame && state.deckCount !== undefined && !state.dealerCards" class="deck"><i class="bi bi-diamond-half" aria-hidden="true"></i><span>{{ state.deckCount }} lá</span></div>
+              <ArenaCard v-for="card in (state.dealerCards?.length ? state.dealerCards : tableCards)" :key="card.id ?? card.cardId" :card="card"/>
+              <div v-if="state.dealerCards?.length && !finished" class="deck" aria-label="Lá úp"><i class="bi bi-diamond-half" aria-hidden="true"></i></div>
+              <p v-if="!state.dealerCards?.length && !tableCards.length && state.deckCount === undefined">Bàn chưa có lá nào</p>
+            </div>
+            <p v-if="state.currentColor" class="color-label">Màu hiện tại <strong>{{ ({ RED: 'Đỏ', GREEN: 'Xanh lá', BLUE: 'Xanh dương', YELLOW: 'Vàng' } as Record<string, string>)[state.currentColor] }}</strong></p>
+          </div>
+          <div v-if="finished && state.shownHands" class="showdown">
+            <h2>Bài mở cuối ván</h2>
+            <div v-for="(hand, id) in state.shownHands" :key="id" class="showdown-row">
+              <strong>{{ nameOf(String(id)) }}<small v-if="state.payouts?.[id]"> +{{ state.payouts[id] }} chip</small><small v-else-if="state.scores?.[id] !== undefined"> · {{ state.scores[id] }} điểm</small></strong>
+              <div class="table-cards"><ArenaCard v-for="card in hand" :key="card.id" :card="card"/></div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="arena-sidebar">
+          <ArenaControls :key="`${sessionId}-${version}`" :game-id="gameId" :state="state" :player-id="playerId" :is-player="isPlayer" :busy="busy" :finished="finished" :name-of="nameOf" @action="act"/>
+          <details v-if="practiceMode && game" class="arena-details">
+            <summary>Cài đặt ván luyện tập</summary>
+            <form class="practice-settings" @submit.prevent="startPractice">
+              <label>Số người<select v-model.number="playerCount"><option v-for="count in game.maxPlayers - Math.max(2, game.minPlayers) + 1" :key="count" :value="count + Math.max(2, game.minPlayers) - 1">{{ count + Math.max(2, game.minPlayers) - 1 }}</option></select></label>
+              <label v-if="boardGame">Độ khó<select v-model="choice"><option value="EASY">Dễ</option><option value="MEDIUM">Vừa</option><option value="HARD">Khó</option></select></label>
+              <button class="btn btn-quiet" :disabled="busy" type="submit">Bắt đầu ván mới</button>
+            </form>
+          </details>
+          <details v-if="game" class="arena-details">
+            <summary>Luật chơi</summary>
+            <ul><li v-for="rule in game.rules" :key="rule">{{ rule }}</li></ul>
+          </details>
+          <details v-if="!practiceMode && gameStore.session?.room_id" class="arena-details">
+            <summary>Trò chuyện tại bàn</summary>
+            <ChatBox :key="gameStore.session.room_id" :channel-id="`ROOM_${gameStore.session.room_id}`" title="Chat bàn chơi"/>
+          </details>
+          <details class="arena-details" open>
+            <summary>Nhật ký ván</summary>
+            <ul v-if="log.length" class="action-log"><li v-for="(event, index) in log" :key="event.id ?? index">{{ historyLine(event) }}</li></ul>
+            <p v-else>Chưa có nước đi.</p>
+          </details>
+        </aside>
+      </div>
     </div>
-    <div v-if="isCardGame" class="player-hand"><div class="hand-label"><span class="eyebrow">Tay bài của bạn</span><small>{{ isTwentyOne ? 'Theo dõi điểm và chọn Rút thêm hoặc Dừng bài' : isBettingGame ? 'Quyết định vòng cược ở bảng điều khiển' : 'Chọn lá rồi xác nhận nước đi' }}</small></div><div class="hand-cards"><button v-for="(card, index) in myHand" :key="index" class="playing-card hand-card" :class="[{ selected: selectedCards.includes(Number(index)) }, card.tone]" @click="chooseCard(index)" :disabled="!canAct || isTwentyOne || isBettingGame">
-<span>{{ card.rank }}</span><strong>{{ card.suit }}</strong><small>{{ card.rank }}</small></button><div v-if="!isTwentyOne && !isBettingGame" class="hand-actions"><button class="btn btn-gold" @click="playCard" :disabled="!selectedCards.length || !canAct">
-<i class="bi bi-check2 me-2"></i>Xác nhận</button><button class="btn btn-quiet" @click="drawCard" :disabled="!canAct">Rút bài</button>
-</div></div></div>
-    <div v-if="showRules" class="rules-drawer"><div class="drawer-inner"><button class="close-button" @click="showRules = false"><i class="bi bi-x-lg"></i></button><div class="eyebrow">Luật {{ activeGame.name }}</div><h2>Chơi đúng nhịp bàn</h2><p>{{ activeGame.description }}</p><div v-for="(rule, index) in activeGame.rules" :key="rule" class="drawer-rule"><span>0{{ index + 1 }}</span><strong>{{ rule }}</strong></div></div></div>
-  </div>
+  </main>
 </template>
 
 <style scoped>
-.arena-page{min-height:100vh;background:#07110f;color:var(--gv-text-main);font-family:'Manrope',sans-serif}.arena-header{height:70px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid rgba(255,255,255,.07);background:rgba(6,15,14,.88);position:relative;z-index:5}.arena-brand{display:flex;align-items:center;gap:10px}.back-button,.arena-icon,.leave-arena{border:0;background:transparent;color:var(--gv-text-muted)}.back-button{margin-right:5px;font-size:1rem}.brand-glyph-small{width:27px;height:27px;display:grid;place-items:center;color:#19211d;background:linear-gradient(135deg,#f0cc82,#ae7f3e);border-radius:8px 2px 8px 2px;transform:rotate(45deg)}.brand-glyph-small i{transform:rotate(-45deg);font-size:.8rem}.arena-brand strong,.arena-brand small{display:block}.arena-brand strong{font-size:.77rem}.arena-brand small{color:var(--gv-text-muted);font-size:.57rem;margin-top:3px}.arena-center-status{display:flex;align-items:center;gap:9px;color:var(--gv-text-muted);font-size:.63rem}.arena-center-status strong{color:var(--gv-accent-success);font-size:.62rem}.spectator-badge{padding:4px 7px;border:1px solid rgba(88,199,176,.2);border-radius:999px;color:var(--gv-secondary);background:rgba(88,199,176,.08);font-size:.52rem}.status-divider{width:1px;height:13px;background:rgba(255,255,255,.12)}.arena-actions{display:flex;align-items:center;gap:10px}.arena-icon{width:30px;height:30px;border:1px solid rgba(255,255,255,.07);border-radius:8px}.leave-arena{padding:7px 10px;border-radius:8px;background:rgba(239,127,133,.08);color:#ef9a9e;font-size:.61rem;font-weight:700}.arena-layout{display:grid;grid-template-columns:minmax(0,1fr) 295px;min-height:calc(100vh - 70px)}.arena-board-wrap{padding:23px 25px 18px;background:radial-gradient(circle at 45% 40%,rgba(24,71,57,.15),transparent 45%)}.arena-table{position:relative;min-height:610px;max-width:920px;margin:0 auto;border:14px solid #122720;border-radius:48px;background:radial-gradient(ellipse at 50% 45%,#21604d 0%,#174738 47%,#0c3027 100%);box-shadow:inset 0 0 0 1px rgba(227,200,136,.3),inset 0 -25px 65px rgba(0,0,0,.3),0 20px 40px rgba(0,0,0,.2);overflow:hidden}.arena-table::after{content:'';position:absolute;inset:15px;border:1px solid rgba(227,200,136,.17);border-radius:32px;pointer-events:none}.arena-table-inner{position:relative;height:100%;min-height:580px}.table-ring{position:absolute;inset:14%;border:1px solid rgba(227,199,130,.11);border-radius:50%}.opponent{position:absolute;z-index:2;display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid rgba(222,196,131,.22);border-radius:12px;background:rgba(5,29,23,.5);backdrop-filter:blur(8px)}.opponent strong,.opponent small{display:block}.opponent strong{font-size:.61rem}.opponent small{color:rgba(214,232,220,.52);font-size:.52rem;margin-top:2px;white-space:nowrap}.opponent-top{top:22px;left:50%;transform:translateX(-50%)}.opponent-left{left:19px;top:43%;}.opponent-right{right:19px;top:43%;}.opponent-bottom{bottom:17px;left:50%;transform:translateX(-50%);min-width:165px}.opponent-avatar,.my-avatar{display:grid;place-items:center;flex:0 0 auto;width:30px;height:30px;border-radius:10px;background:#263d36;color:#d0b16e;font-weight:800;font-size:.67rem}.my-avatar{background:rgba(214,173,98,.18);color:var(--gv-primary)}.opponent-count,.my-balance{margin-left:auto;color:var(--gv-primary);font:500 .58rem 'DM Mono',monospace}.opponent-count small{display:inline;color:var(--gv-text-muted);font:500 .52rem 'DM Mono',monospace}.my-balance{color:var(--gv-accent-success)}.mini-live,.turn-dot{display:inline-block;width:5px;height:5px;margin-right:4px;border-radius:50%;background:var(--gv-accent-warning)}.board-center{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center}.card-piles{display:flex;align-items:center;gap:18px}.community-cards{display:flex;align-items:center;gap:5px}.community-card{width:42px;height:59px;padding:5px 4px;font-size:.62rem}.community-card strong{font-size:1rem}.community-card small{display:none}.deck-stack{position:relative;display:flex;flex-direction:column;align-items:center}.deck-stack>span{position:absolute;width:68px;height:95px;border:1px solid rgba(219,184,106,.33);border-radius:7px;background:#27453c}.deck-stack>span:first-child{transform:rotate(-7deg);left:-5px;top:2px}.deck-stack>span:nth-child(2){transform:rotate(4deg);left:3px;top:1px}.back-card{position:relative;z-index:1;display:grid;place-items:center;width:68px;height:95px;border:1px solid rgba(239,207,135,.75);border-radius:7px;color:rgba(239,207,135,.8);background:repeating-linear-gradient(45deg,#17372f 0,#17372f 3px,#1b4237 3px,#1b4237 6px);box-shadow:0 8px 12px rgba(0,0,0,.22)}.back-card i{font-size:1.3rem}.deck-stack small{margin-top:9px;color:rgba(224,232,212,.48);font-size:.47rem;letter-spacing:.14em}.center-separator{display:flex;align-items:center;gap:6px;color:rgba(231,202,134,.38)}.center-separator span{width:20px;height:1px;background:rgba(231,202,134,.25)}.center-separator i{font-size:.55rem}.playing-card{display:flex;flex-direction:column;align-items:center;justify-content:space-between;width:68px;height:95px;padding:8px 8px 6px;border:1px solid rgba(236,224,192,.7);border-radius:7px;box-shadow:0 10px 20px rgba(0,0,0,.22);background:#f5f2e9;font-family:Georgia,serif}.playing-card span{align-self:flex-start;font-size:.78rem;font-weight:700;line-height:1}.playing-card strong{font-size:1.65rem;line-height:1}.playing-card small{align-self:flex-end;font-size:.56rem;line-height:1;transform:rotate(180deg)}.playing-card.red{color:#bb4f5b}.playing-card.black{color:#242c2a}.pot-display{display:flex;flex-direction:column;align-items:center;margin-top:18px}.pot-display small{color:rgba(226,209,167,.55);font-size:.45rem;letter-spacing:.14em}.pot-display strong{color:#f0cf82;font:500 .76rem 'DM Mono',monospace;margin-top:5px}.board-game-center{display:flex;flex-direction:column;align-items:center;color:rgba(239,211,147,.75)}.live-board{display:grid;grid-template-columns:repeat(8,34px);border:3px solid rgba(239,211,147,.6);box-shadow:0 10px 26px rgba(0,0,0,.3)}.live-board.xiangqi-board{grid-template-columns:repeat(9,30px)}.board-square{width:34px;height:34px;border:0;border-radius:0;color:#f5db9c;background:transparent;font-family:Georgia,serif;font-size:1.22rem;line-height:1}.xiangqi-board .board-square{width:30px;height:31px;font-size:1.05rem}.board-square.light-square{background:#b89261}.board-square.dark-square{background:#6e4732}.board-square.selected{outline:2px solid #f6d486;outline-offset:-3px;background:#8d6a3e}.board-square:disabled{opacity:.82}.board-emblem{width:63px;height:63px;display:grid;place-items:center;border:1px solid rgba(239,211,147,.33);border-radius:18px;background:rgba(9,39,30,.42);font-size:1.6rem}.board-game-center strong{font-family:'Playfair Display',serif;margin-top:10px;font-size:1rem}.board-game-center small{color:rgba(214,234,219,.52);font-size:.55rem;margin-top:4px}.turn-message{position:absolute;left:50%;bottom:120px;transform:translateX(-50%);color:#cbe2d6;border:1px solid rgba(98,213,163,.22);border-radius:999px;padding:7px 13px;background:rgba(5,35,26,.5);font-size:.58rem;white-space:nowrap}.turn-dot{background:var(--gv-accent-success);box-shadow:0 0 0 4px rgba(98,213,163,.1)}.arena-bottom-bar{display:flex;align-items:center;gap:23px;max-width:920px;margin:14px auto 0}.bottom-stat{display:flex;gap:8px;align-items:center;color:var(--gv-secondary)}.bottom-stat>i{font-size:.85rem}.bottom-stat strong,.bottom-stat small{display:block}.bottom-stat strong{font-size:.61rem}.bottom-stat small{color:var(--gv-text-muted);font-size:.52rem;margin-top:3px}.bottom-help{color:var(--gv-text-dim);font-size:.58rem}.bottom-help i{color:var(--gv-primary);margin-right:4px}.arena-side-panel{padding:27px 20px;border-left:1px solid rgba(255,255,255,.07);background:rgba(9,22,19,.72)}.side-panel-header{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.side-panel-header h2{font-size:1.15rem;font-weight:800;margin:5px 0 0}.round-chip{color:var(--gv-primary);font:500 .53rem 'DM Mono',monospace;padding:5px 6px;border:1px solid rgba(214,173,98,.18);border-radius:7px}.score-line{display:flex;justify-content:space-between;margin-top:22px;color:var(--gv-text-muted);font-size:.63rem}.score-line strong{color:var(--gv-text-main)}.panel-divider{height:1px;margin:22px 0;border-top:1px solid rgba(255,255,255,.07)}.action-title{display:flex;align-items:center;justify-content:space-between;color:var(--gv-text-main);font-size:.67rem;font-weight:800}.action-title small{color:var(--gv-text-muted);font-size:.58rem;font-weight:500}.hand-preview{display:flex;align-items:center;margin:16px 0 18px;padding-left:8px}.mini-card{display:flex;flex-direction:column;align-items:center;justify-content:center;width:38px;height:56px;margin-left:-8px;border:1px solid rgba(236,224,192,.64);border-radius:5px;background:#f5f2e9;font-family:Georgia,serif}.mini-card span{font-size:.57rem;font-weight:700}.mini-card strong{font-size:1rem;line-height:1}.mini-card.red{color:#bb4f5b}.mini-card.black{color:#242c2a}.more-cards{margin-left:5px;color:var(--gv-text-muted);font:500 .58rem 'DM Mono',monospace}.action-buttons{display:flex;flex-direction:column;gap:7px}.action-primary,.action-secondary{font-size:.63rem;font-weight:800;padding:9px}.action-primary{color:#19211d;background:var(--gv-primary)}.action-primary:hover{background:var(--gv-primary-hover)}.action-secondary{color:var(--gv-text-main);border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04)}.ai-option{display:flex;align-items:center;gap:8px;margin-top:14px;padding:10px;border-radius:10px;background:rgba(255,255,255,.035)}.ai-icon{display:grid;place-items:center;width:25px;height:25px;color:var(--gv-primary);border-radius:7px;background:rgba(214,173,98,.1)}.ai-option strong,.ai-option small{display:block}.ai-option strong{font-size:.62rem}.ai-option small{color:var(--gv-text-muted);font-size:.53rem;margin-top:3px}.activity-feed{display:flex;flex-direction:column;gap:11px}.feed-more{border:0;background:transparent;color:var(--gv-primary);font-size:.56rem}.feed-item{display:flex;align-items:center;gap:7px;color:var(--gv-text-muted);font-size:.57rem}.feed-item strong{color:var(--gv-text-main)}.feed-item small{margin-left:auto;color:var(--gv-text-dim);font:500 .5rem 'DM Mono',monospace}.feed-avatar{display:grid;place-items:center;width:22px;height:22px;border-radius:7px;font-size:.52rem;font-weight:800}.feed-avatar.gold{color:#1f2118;background:rgba(214,173,98,.65)}.feed-avatar.mint{color:#19302a;background:rgba(88,199,176,.7)}.feed-avatar.purple{color:#22182e;background:rgba(156,123,255,.7)}.spectator-panel p{margin:12px 0 0;color:var(--gv-text-muted);font-size:.62rem;line-height:1.55}.spectator-note{display:flex;align-items:center;gap:7px;margin-top:23px;padding:10px;color:var(--gv-text-muted);border:1px solid rgba(88,199,176,.13);border-radius:10px;background:rgba(88,199,176,.05);font-size:.57rem}.spectator-note i{color:var(--gv-secondary)}.spectator-note strong{color:var(--gv-text-main)}.player-hand{padding:0 25px 24px;background:linear-gradient(180deg,rgba(7,17,15,0),rgba(7,17,15,.97) 25%)}.hand-label{display:flex;align-items:flex-end;justify-content:space-between;max-width:920px;margin:0 auto 9px}.hand-label small{color:var(--gv-text-dim);font-size:.57rem}.hand-cards{display:flex;align-items:flex-end;gap:8px;max-width:920px;margin:0 auto}.hand-card{width:76px;height:108px;cursor:pointer}.hand-card:hover,.hand-card.selected{transform:translateY(-12px);box-shadow:0 15px 24px rgba(0,0,0,.24)}.hand-card.selected{border:2px solid var(--gv-primary);box-shadow:0 12px 28px rgba(214,173,98,.28)}.hand-actions{display:flex;gap:8px;margin-left:auto}.hand-actions .btn{font-size:.62rem;padding:9px 12px}.rules-drawer{position:fixed;z-index:20;inset:0 0 0 auto;width:350px;padding:20px;background:rgba(7,17,15,.96);border-left:1px solid rgba(214,173,98,.19);box-shadow:-20px 0 50px rgba(0,0,0,.3)}.drawer-inner{position:relative;padding-top:30px}.close-button{position:absolute;right:0;top:0;width:30px;height:30px;border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--gv-text-muted);background:rgba(255,255,255,.03)}.drawer-inner h2{font-family:'Playfair Display',serif;font-size:1.7rem;margin:7px 0}.drawer-inner>p{color:var(--gv-text-muted);font-size:.7rem;line-height:1.6;margin-bottom:24px}.drawer-rule{display:flex;gap:12px;padding:14px 0;border-top:1px solid rgba(255,255,255,.07)}.drawer-rule span{color:var(--gv-primary);font:500 .65rem 'DM Mono',monospace}.drawer-rule strong{font-size:.67rem;line-height:1.5}
-@media(max-width:1100px){.arena-layout{grid-template-columns:1fr}.arena-side-panel{border-left:0;border-top:1px solid rgba(255,255,255,.07);display:grid;grid-template-columns:repeat(2,1fr);gap:0 25px}.arena-side-panel .side-panel-header,.arena-side-panel .panel-divider,.arena-side-panel .spectator-note{grid-column:1/-1}.arena-side-panel .panel-divider{margin:15px 0}.arena-side-panel .score-line{margin-top:10px}.activity-feed{margin-top:0}}@media(max-width:700px){.arena-header{padding:0 14px}.arena-center-status{display:none}.leave-arena{font-size:.55rem}.arena-board-wrap{padding:14px 8px}.arena-table{min-height:500px;border-width:8px;border-radius:31px}.arena-table-inner{min-height:484px}.opponent-left{left:4px}.opponent-right{right:4px}.opponent-top{top:11px}.opponent-bottom{bottom:9px}.opponent{padding:5px 7px}.opponent strong{font-size:.52rem}.opponent small{font-size:.45rem}.opponent-avatar,.my-avatar{width:24px;height:24px}.turn-message{bottom:78px;font-size:.49rem}.card-piles{transform:scale(.83)}.arena-bottom-bar{padding:0 8px;gap:12px;flex-wrap:wrap}.bottom-help{width:100%;margin-left:0!important}.arena-side-panel{display:block;padding:20px 15px}.arena-side-panel .score-line{margin-top:15px}.hand-cards{overflow-x:auto;padding:0 7px}.hand-card{width:62px;height:91px;flex:0 0 auto}.hand-actions{min-width:180px;flex-direction:column}.rules-drawer{width:100%}}
+.arena-root{min-height:100vh;background:radial-gradient(ellipse at 45% 0%,#18342b,#0b1312 45%);color:#f7efdf;font-family:'Manrope',sans-serif}
+.arena-top{height:68px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 clamp(15px,5vw,65px);border-bottom:1px solid #fff2;background:#0b1513}
+.arena-brand{display:flex;align-items:center;gap:12px;color:#eee5d2;text-decoration:none}.arena-brand i{color:#ebc782;font-size:1.2rem}.arena-brand span{font:700 1.45rem Georgia,serif}.arena-brand small{padding-left:12px;border-left:1px solid #ffffff2a;color:#c4cdc2;font-size:.88rem}
+.arena-nav-actions{display:flex;align-items:center;gap:10px}.arena-nav-actions .btn{padding:4px 8px;min-height:32px}.connection{display:flex;align-items:center;gap:7px;color:#c9d7cd;white-space:nowrap;font-size:.85rem}.connection span{width:7px;height:7px;border-radius:50%;background:#7dd6a9}
+.arena-content{max-width:1400px;margin:auto;padding:27px clamp(12px,4vw,55px) 52px}.arena-empty{padding:55px clamp(18px,5vw,64px)}
+.match-heading{display:flex;justify-content:space-between;align-items:end;gap:10px;margin-bottom:22px}.match-heading h1,.arena-empty h1{font:600 clamp(2rem,5vw,3.8rem)/1 'Playfair Display',Georgia,serif;margin:7px 0 0}
+.match-mode{color:var(--game-accent);margin:0;font-weight:800;font-size:.87rem}.match-mode i{margin-right:4px}.turn-banner{display:flex;align-items:center;gap:9px;padding:9px 13px;background:#10211d;border:1px solid #2e564a;border-radius:999px;font-size:.92rem}.turn-banner i{font-size:.49rem;color:#8bdab4}.turn-banner strong{font-variant-numeric:tabular-nums;color:#efcd87}
+.arena-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(290px,360px);gap:18px;align-items:start}.arena-sidebar{display:grid;gap:12px;min-width:0}
+.arena-table{min-height:490px;padding:clamp(15px,3vw,27px);border:1px solid #e3c58755;border-radius:22px;background:radial-gradient(ellipse at 50% 45%,#256451,#143b31 70%,#102b25);box-shadow:inset 0 0 38px #071a13aa,0 15px 38px #0003}
+.night-table{background:radial-gradient(ellipse at 50% 38%,#2b2f54,#1a2438 70%,#151b2c);border-color:#9d81ff51}
+.table-seats{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:22px}.arena-seat{display:flex;align-items:center;gap:8px;min-width:min(125px,100%);flex:1 1 130px;max-width:280px;padding:7px 9px;border:1px solid #e0b9793b;border-radius:9px;background:#0d1e1bba}.arena-seat.current{border-color:#e3c780;box-shadow:0 0 0 1px #e3c78080}.arena-seat.mine .initial{background:#e7c88f;color:#2a2118}.arena-seat strong,.arena-seat small{display:block;overflow-wrap:anywhere}.arena-seat small{color:#bdc9be;font-size:.84rem}.arena-seat img,.initial{width:34px;height:34px;border-radius:7px;flex:0 0 auto}.arena-seat img{object-fit:cover}.initial{display:grid;place-items:center;background:#384946;color:#f2d69d;font-weight:800}
+.felt-center,.werewolf-table{min-height:320px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:21px}.table-cards{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:9px}
+.deck{display:grid;gap:5px;place-content:center;text-align:center;width:clamp(46px,6vw,65px);aspect-ratio:2/3;border:1px solid #c8a96d;border-radius:8px;color:#f0d298;background:repeating-linear-gradient(45deg,#122d26 0 4px,#1c3930 4px 8px);box-shadow:0 6px 13px #0005}.deck i{font-size:1.3rem}.deck span{font-size:.72rem}
+.pot{display:grid;gap:4px;text-align:center}.pot strong{color:#f9d89b;font:700 1.7rem Georgia,serif}.pot span{font-size:.9rem;color:#c1d4c8}.color-label{margin:0;color:#dbe4d8}.color-label strong{color:#f0d196;margin-left:4px}
+.werewolf-table i{font-size:3.6rem;color:#e5cdfb}.werewolf-table strong{font:700 2rem Georgia,serif}.werewolf-table p{margin:0;color:#d9d7e9}.role-label{border:1px solid #ceb2e465;border-radius:8px;padding:9px 14px}
+.arena-details{padding:14px 16px;background:#111d1a;border:1px solid #d9e9d624;border-radius:12px}.arena-details summary{font-weight:800;cursor:pointer}.arena-details ul,.arena-details p{margin:8px 0 0;color:#c2d0c3}.arena-details ul{padding-left:20px}.arena-details li{margin:5px 0}.arena-details .action-log{padding:0;list-style:none}.action-log li{border-top:1px solid #ffffff17;padding-top:6px}
+.practice-settings{margin-top:11px;display:flex;flex-wrap:wrap;align-items:end;gap:9px}.practice-settings label{display:grid;gap:4px;font-size:.87rem}.practice-settings select{min-height:36px;background:#0b1513;color:#f7efdf;border:1px solid #ffffff36;border-radius:6px;padding:4px 9px}
+.arena-error,.arena-result{display:flex;align-items:center;gap:12px;padding:13px 17px;margin:0 0 14px;border:1px solid #d68b7c70;background:#412322;border-radius:10px}.arena-result{background:#243728;border-color:#d9bd7a68}.arena-result h2{font:700 1.35rem Georgia,serif;margin:0}.arena-result p{margin:4px 0 0}.arena-result .btn{margin-left:auto}.arena-result>i{color:#f3cd83;font-size:1.5rem}
+.race-track,.city-grid{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;padding:8px;background:#101f1d;border-radius:10px}.race-track>div,.city-grid>div{min-height:48px;padding:4px;border-radius:5px;background:#263d34;display:flex;flex-direction:column;align-items:start;gap:3px}.race-track>div.marked,.city-grid>div.owned{background:#90683b;color:#fff5e5}.race-track strong,.race-track small{font-size:.76rem}.horse-stable{display:flex;justify-content:space-between;gap:8px;margin:8px 0 0;color:#e0e6d6}
+.city-grid{grid-template-columns:repeat(6,minmax(0,1fr))}.city-grid>div{min-height:82px;padding:5px}.city-grid strong{font-size:.85rem;line-height:1.18}.city-grid small{color:#e3dcbe;font-size:.76rem}.city-token{font-size:.68rem;background:#151c19;color:#fbdda3;border-radius:4px;padding:2px 4px;overflow-wrap:anywhere}.dice{text-align:center;color:#f7d996;font-weight:900;font-size:1.1rem}
+.showdown{border-top:1px solid #f2df9b45;padding-top:15px}.showdown h2{font:700 1.24rem Georgia,serif}.showdown-row{margin-top:13px}.showdown-row .table-cards{justify-content:start;margin-top:6px}.showdown-row small{font-weight:500;color:#ecd39f}
+@media(max-width:940px){.arena-grid{grid-template-columns:1fr}.arena-table{min-height:0}.felt-center,.werewolf-table{min-height:220px}}@media(max-width:520px){.arena-content{padding-top:18px}.arena-brand{gap:7px}.arena-brand small{padding-left:7px;font-size:.73rem}.connection{font-size:.73rem}.match-heading{align-items:start;flex-direction:column}.arena-table{padding:10px}.arena-seat{flex-basis:110px}.table-seats{margin-bottom:12px}.city-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.horse-stable{font-size:.82rem}.turn-banner{font-size:.85rem}}
 </style>

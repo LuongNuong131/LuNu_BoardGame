@@ -10,6 +10,8 @@ export interface GameEngine<TState, TAction, TResult> {
   addPlayer?(state: TState, playerId: string): TState;
   getAiAction?(state: TState, playerId: string, difficulty: 'EASY' | 'MEDIUM' | 'HARD'): TAction | null;
 
+  advanceExpired?(state: TState, now?: number): TState;
+
   // Server-authoritative: Kiểm tra hành động có hợp lệ không
   validateAction(state: TState, action: TAction, playerId: string): boolean;
   

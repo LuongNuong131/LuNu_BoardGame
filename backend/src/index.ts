@@ -1,6 +1,7 @@
 import fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
+import multipart from '@fastify/multipart';
 import dotenv from 'dotenv';
 import { errorHandler } from './middleware/errorHandler';
 import { authRoutes } from './modules/auth/auth.routes';
@@ -19,7 +20,8 @@ initializeGames();
 const server = fastify({ logger: { transport: { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss Z', ignore: 'pid,hostname' } } } });
 
 server.register(helmet);
-server.register(cors, { origin: '*', credentials: true });
+server.register(cors, { origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map((origin) => origin.trim()) : '*', credentials: true });
+server.register(multipart, { limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
 server.setErrorHandler(errorHandler);
 
 server.get('/api/health', async (request, reply) => reply.send({ success: true, data: { status: 'ONLINE' }, error: null }));
@@ -35,14 +37,6 @@ const start = async () => {
   try {
     const port = parseInt(process.env.PORT || '3000', 10);
     const host = process.env.HOST || '0.0.0.0';
-    try {
-      const multipartModuleName: string = '@fastify/multipart';
-      const multipart: any = await import(multipartModuleName);
-      await server.register(multipart.default, { limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
-      server.log.info('Avatar multipart upload is enabled.');
-    } catch {
-      server.log.warn('Optional @fastify/multipart is not installed; avatar upload is temporarily disabled.');
-    }
     await server.listen({ port, host });
     server.log.info(`GameVerse Backend is running on http://${host}:${port}`);
   } catch (err) {

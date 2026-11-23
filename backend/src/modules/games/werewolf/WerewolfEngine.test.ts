@@ -8,7 +8,7 @@ const state = engine.initialize(players, { gameId: 'test-game', seed: 42 });
 
 assert.equal(state.players.length, 6);
 assert.equal(state.phase, 'NIGHT');
-assert.equal(engine.getPublicState(state, 'p1').players.every((p: any) => p.roleId === undefined || p.playerId === 'p1'), true);
+assert.equal(engine.getPublicState(state, 'observer').players.every((p) => p.roleId === undefined), true);
 
 const wolf = state.players.find((p) => p.roleId === 'werewolf')!;
 const nonWolf = state.players.find((p) => p.roleId !== 'werewolf')!;
@@ -24,7 +24,11 @@ for (const player of current.players.filter((p) => p.alive)) {
   if (player.roleId === 'guard') actions.push([player.playerId, { type: 'GUARD_PROTECT', targetPlayerId: nonWolf.playerId }]);
   if (player.roleId === 'witch') actions.push([player.playerId, { type: 'WITCH_HEAL' }]);
 }
+actions.sort(([, left], [, right]) => Number(left.type === 'WITCH_HEAL') - Number(right.type === 'WITCH_HEAL'));
 for (const [actorId, action] of actions) current = engine.applyAction(current, action, actorId).newState;
+assert.equal(current.phase, 'DISCUSSION');
+assert.equal(engine.getPublicState(current, 'observer').events.some((event) => event.type === 'ACTION_SUBMITTED'), false);
+current = engine.advanceExpired(current, Date.parse(current.phaseEndsAt) + 1);
 assert.equal(current.phase, 'VOTING');
 assert.equal(current.players.find((p) => p.playerId === nonWolf.playerId)?.alive, true);
 

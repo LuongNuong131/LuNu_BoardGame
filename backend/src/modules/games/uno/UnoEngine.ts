@@ -1,15 +1,17 @@
-import { GameEngine } from '../core/GameEngine';
-import { UnoState, UnoAction, UnoCard, UnoColor, UnoType } from './uno.types';
+import { shuffle } from '../core/random';
+import type { GameEngine } from '../core/GameEngine';
+import type { UnoState, UnoAction, UnoCard, UnoColor, UnoType } from './uno.types';
+
+const COLORS: UnoColor[] = ['RED', 'GREEN', 'BLUE', 'YELLOW'];
 
 export class UnoEngine implements GameEngine<UnoState, UnoAction, any> {
   
   // 1. Tạo và xào bài
   private createDeck(): UnoCard[] {
-    const colors: UnoColor[] = ['RED', 'GREEN', 'BLUE', 'YELLOW'];
     const deck: UnoCard[] = [];
     let idCounter = 1;
 
-    for (const color of colors) {
+    for (const color of COLORS) {
       deck.push({ id: `c${idCounter++}`, color, type: '0' });
       for (const type of ['1','2','3','4','5','6','7','8','9','SKIP','REVERSE','DRAW_TWO'] as UnoType[]) {
         deck.push({ id: `c${idCounter++}`, color, type });
@@ -20,16 +22,11 @@ export class UnoEngine implements GameEngine<UnoState, UnoAction, any> {
       deck.push({ id: `c${idCounter++}`, color: 'WILD', type: 'WILD' });
       deck.push({ id: `c${idCounter++}`, color: 'WILD', type: 'WILD_DRAW_FOUR' });
     }
-    // Thuật toán xào bài (Fisher-Yates)
-    for (let i = deck.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [deck[i], deck[j]] = [deck[j], deck[i]];
-    }
-    return deck;
+    return shuffle(deck);
   }
 
   // 2. Khởi tạo ván đấu
-  initialize(players: string[], config: any): UnoState {
+  initialize(players: string[], _config: any): UnoState {
     const deck = this.createDeck();
     const hands: Record<string, UnoCard[]> = {};
     
@@ -38,12 +35,7 @@ export class UnoEngine implements GameEngine<UnoState, UnoAction, any> {
       hands[p] = deck.splice(0, 7);
     });
 
-    // Lật lá đầu tiên (không được là lá đặc biệt Wild)
-    let firstCard = deck.shift()!;
-    while (firstCard.color === 'WILD') {
-      deck.push(firstCard);
-      firstCard = deck.shift()!;
-    }
+    const firstCard = deck.splice(deck.findIndex((card) => /^\d$/.test(card.type)), 1)[0];
 
     return {
       players,
@@ -68,40 +60,33 @@ export class UnoEngine implements GameEngine<UnoState, UnoAction, any> {
 
   getAiAction(state: UnoState, playerId: string, _difficulty: 'EASY' | 'MEDIUM' | 'HARD'): UnoAction | null {
     if (state.players[state.currentTurnIndex] !== playerId || state.winner) return null;
-    const topCard = state.discardPile[state.discardPile.length - 1];
-    const playable = (state.hands[playerId] || []).find((card) => card.color === 'WILD' || card.color === state.currentColor || card.type === topCard.type);
-    if (!playable) return { type: 'DRAW_CARD', payload: {} };
-    return { type: 'PLAY_CARD', payload: { cardId: playable.id, chosenColor: playable.color === 'WILD' ? 'RED' : undefined } };
+    const hand = state.hands[playerId] || [];
+    const color = [...COLORS].sort((a, b) => hand.filter((card) => card.color === b).length - hand.filter((card) => card.color === a).length)[0];
+    for (const card of hand) {
+      const action: UnoAction = { type: 'PLAY_CARD', payload: { cardId: card.id, chosenColor: card.color === 'WILD' ? color : undefined, sayUno: true } };
+      if (this.validateAction(state, action, playerId)) return action;
+    }
+    return state.drawnCardId || !this.validateAction(state, { type: 'DRAW_CARD' }, playerId) ? { type: 'PASS' } : { type: 'DRAW_CARD' };
   }
 
-  // 3. Kiểm tra tính hợp lệ của nước đi (Server Authoritative)
   validateAction(state: UnoState, action: UnoAction, playerId: string): boolean {
-    if (state.winner) return false; // Game over
-    if (state.players[state.currentTurnIndex] !== playerId) return false; // Chưa tới lượt
-
-    if (action.type === 'DRAW_CARD') return true;
-
-    if (action.type === 'PLAY_CARD') {
-      const hand = state.hands[playerId];
-      const card = hand.find(c => c.id === action.payload.cardId);
-      if (!card) return false; // Không có lá bài này trên tay
-
-      // Bài đen (Wild) đánh lúc nào cũng được
-      if (card.color === 'WILD') {
-        if (!action.payload.chosenColor || action.payload.chosenColor === 'WILD') return false; // Phải chọn màu
-        return true;
-      }
-
-      // Đánh bài màu: Cùng màu hoặc cùng số/loại
-      const topCard = state.discardPile[state.discardPile.length - 1];
-      if (card.color === state.currentColor || card.type === topCard.type) {
-        return true;
-      }
+    if (!action || state.winner || state.players[state.currentTurnIndex] !== playerId) return false;
+    const canDraw = state.deck.length > 0 || state.discardPile.length > 1;
+    if (action.type === 'DRAW_CARD') return !state.drawnCardId && canDraw;
+    if (action.type === 'PASS') return Boolean(state.drawnCardId) || !canDraw;
+    if (action.type !== 'PLAY_CARD') return false;
+    const hand = state.hands[playerId];
+    const card = hand.find((item) => item.id === action.payload?.cardId);
+    if (!card || (state.drawnCardId && state.drawnCardId !== card.id)) return false;
+    if (card.color === 'WILD') {
+      return COLORS.includes(action.payload.chosenColor!) && (card.type !== 'WILD_DRAW_FOUR' ||
+        !hand.some((item) => item.color === state.currentColor));
     }
-    return false;
+    return card.color === state.currentColor || card.type === state.discardPile.at(-1)?.type;
   }
 
   private nextTurn(state: UnoState, steps: number = 1) {
+    state.drawnCardId = undefined;
     const numPlayers = state.players.length;
     state.currentTurnIndex = (state.currentTurnIndex + (state.direction * steps) + numPlayers * 10) % numPlayers;
   }
@@ -112,7 +97,7 @@ export class UnoEngine implements GameEngine<UnoState, UnoAction, any> {
       if (state.deck.length === 0) {
         // Nọc hết bài -> Lấy bài đã đánh xào lại làm Nọc (chừa lại lá trên cùng)
         const topCard = state.discardPile.pop()!;
-        state.deck = state.discardPile.sort(() => Math.random() - 0.5);
+        state.deck = shuffle(state.discardPile);
         state.discardPile = [topCard];
       }
       if (state.deck.length > 0) {
@@ -123,15 +108,19 @@ export class UnoEngine implements GameEngine<UnoState, UnoAction, any> {
 
   // 4. Cập nhật State dựa trên Action
   applyAction(state: UnoState, action: UnoAction, playerId: string): { newState: UnoState; events: any[] } {
+    if (!this.validateAction(state, action, playerId)) throw new Error('INVALID_ACTION');
     const newState = JSON.parse(JSON.stringify(state)) as UnoState;
     const events: any[] = [];
 
     if (action.type === 'DRAW_CARD') {
       this.drawCards(newState, newState.currentTurnIndex, 1);
-      this.nextTurn(newState);
+      newState.drawnCardId = newState.hands[playerId].at(-1)?.id;
       events.push({ type: 'PLAYER_DRAWN', playerId });
     } 
-    else if (action.type === 'PLAY_CARD') {
+    else if (action.type === 'PASS') {
+      this.nextTurn(newState);
+      events.push({ type: 'PASS', playerId });
+    } else if (action.type === 'PLAY_CARD') {
       const hand = newState.hands[playerId];
       const cardIndex = hand.findIndex(c => c.id === action.payload.cardId);
       const card = hand.splice(cardIndex, 1)[0];
@@ -141,11 +130,10 @@ export class UnoEngine implements GameEngine<UnoState, UnoAction, any> {
 
       events.push({ type: 'CARD_PLAYED', playerId, card, chosenColor: newState.currentColor });
 
-      // Check hết bài -> Thắng
-      if (hand.length === 0) {
-        newState.winner = playerId;
-        events.push({ type: 'GAME_OVER', winner: playerId });
-        return { newState, events };
+      const won = hand.length === 0;
+      if (hand.length === 1 && action.payload.sayUno !== true) {
+        this.drawCards(newState, newState.currentTurnIndex, 2);
+        events.push({ type: 'UNO_PENALTY', playerId });
       }
 
       // Xử lý hiệu ứng bài
@@ -169,6 +157,10 @@ export class UnoEngine implements GameEngine<UnoState, UnoAction, any> {
       }
 
       this.nextTurn(newState, stepsToNext);
+      if (won) {
+        newState.winner = playerId;
+        events.push({ type: 'GAME_OVER', winner: playerId });
+      }
     }
 
     return { newState, events };
@@ -183,6 +175,13 @@ export class UnoEngine implements GameEngine<UnoState, UnoAction, any> {
 
     return {
       ...state,
+      drawnCardId: state.players[state.currentTurnIndex] === playerId ? state.drawnCardId : undefined,
+      availableActions: [
+        ...(this.validateAction(state, { type: 'DRAW_CARD' }, playerId) ? ['DRAW_CARD'] : []),
+        ...(this.validateAction(state, { type: 'PASS' }, playerId) ? ['PASS'] : []),
+      ],
+      playableCards: (state.hands[playerId] || []).filter((card) =>
+        this.validateAction(state, { type: 'PLAY_CARD', payload: { cardId: card.id, chosenColor: 'RED' } }, playerId)).map((card) => card.id),
       hands: undefined, // Xóa mảng tay bài gốc
       deckCount: state.deck.length,
       deck: undefined,

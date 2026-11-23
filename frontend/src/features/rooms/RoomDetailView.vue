@@ -16,6 +16,7 @@ const roomStore = useRoomStore();
 const authStore = useAuthStore();
 const uiStore = useUiStore();
 const isStarting = ref(false);
+const aiLevel = ref('MEDIUM');
 const activeGuide = ref(0);
 const realtimeStatus = ref('CONNECTING');
 let roomSubscription: RealtimeChannel | null = null;
@@ -25,8 +26,8 @@ let roomPollTimer: ReturnType<typeof setInterval> | undefined;
 let roomStarting = false;
 
 const demoRoom = computed(() => DEMO_ROOMS.find((item) => item.id === route.params.id));
-const room = computed(() => roomStore.currentRoom || demoRoom.value);
-const game = computed(() => room.value ? GAME_BY_ID[room.value.game_id] : GAME_BY_ID.WEREWOLF);
+const room = computed(() => roomStore.currentRoom?.id === route.params.id ? roomStore.currentRoom : demoRoom.value);
+const game = computed(() => room.value ? (GAME_BY_ID[room.value.game_id] ?? GAME_BY_ID.WEREWOLF) : GAME_BY_ID.WEREWOLF);
 const demoPlayers = computed(() => {
   if (!demoRoom.value) return [];
   const names = ['Linh Mộc', 'Khanh Vu', 'An Khang', 'Mỹ Hạnh', 'Tú Anh', 'Duy Minh', 'Hà My', 'Bảo Long'];
@@ -38,7 +39,7 @@ const realtimeLabel = computed(() => realtimeStatus.value === 'SUBSCRIBED' ? 'Re
 const seats = computed(() => Array.from({ length: room.value?.max_players || game.value.maxPlayers }, (_, index) => players.value.find((player: any) => player.seat === index + 1) || null));
 const isFull = computed(() => players.value.length >= (room.value?.max_players || game.value.maxPlayers));
 const currentUserIsOwner = computed(() => authStore.profile?.id && room.value?.owner_id === authStore.profile.id);
-const canStartAi = computed(() => Boolean(currentUserIsOwner.value && room.value && players.value.length === 1 && ['CHESS', 'CO_TUONG'].includes(room.value.game_id)));
+const canStartAi = computed(() => Boolean(currentUserIsOwner.value && room.value && !room.value.entry_fee && players.value.length === 1 && ['CHESS', 'CO_TUONG'].includes(room.value.game_id)));
 const canDeleteRoom = computed(() => Boolean(currentUserIsOwner.value || ['ADMIN', 'SUPER_ADMIN'].includes(authStore.profile?.role)));
 
 const routeToActiveSession = async (roomId: string) => {
@@ -83,6 +84,8 @@ onMounted(async () => {
   if (String(roomId).startsWith('demo-')) return;
   try {
     await roomStore.fetchRoomDetail(roomId);
+    await roomStore.joinRoom(roomId);
+    await roomStore.fetchRoomDetail(roomId);
     if (await routeToActiveSession(roomId)) return;
     await subscribeToRoom(roomId);
     roomPollTimer = setInterval(async () => {
@@ -111,7 +114,7 @@ const handleStartGame = async (againstAi = false) => {
   if (!room.value || String(room.value.id).startsWith('demo-')) { router.push(`/game/demo-${room.value?.game_id || 'WEREWOLF'}`); return; }
   isStarting.value = true;
   try {
-    const res: any = await apiClient.post(`/sessions/room/${room.value.id}/start`, againstAi ? { against_ai: true, ai_level: 'MEDIUM' } : {});
+    const res: any = await apiClient.post(`/sessions/room/${room.value.id}/start`, againstAi ? { against_ai: true, ai_level: aiLevel.value } : {});
     if (res.success) router.push(`/game/${res.data.sessionId}`);
   } catch (err: any) { uiStore.error(err.message || 'Không thể bắt đầu trận đấu.'); } finally { isStarting.value = false; }
 };
@@ -122,10 +125,19 @@ const deleteCurrentRoom = async () => {
 };
 
 const leaveRoomAndExit = async () => {
-  if (room.value && !String(room.value.id).startsWith('demo-')) {
-    try { await roomStore.leaveRoom(room.value.id); } catch { /* still allow the user to leave the view if the network is unavailable */ }
-  }
-  router.push('/rooms');
+  if (!room.value || demoRoom.value) return;
+  if (!await uiStore.confirmAction('Bạn muốn rời phòng và trả ghế?', { title: 'Rời phòng', confirmLabel: 'Rời phòng' })) return;
+  try {
+    await roomStore.leaveRoom(room.value.id);
+    await router.push('/rooms');
+  } catch (error: any) { uiStore.error(error.message || 'Không thể rời phòng.'); }
+};
+
+const shareRoom = async () => {
+  try {
+    await navigator.clipboard.writeText(window.location.href);
+    uiStore.success('Đã sao chép liên kết phòng.');
+  } catch { uiStore.error('Không thể sao chép liên kết.'); }
 };
 
 const takeSeat = async () => {
@@ -145,7 +157,7 @@ const takeSeat = async () => {
 
 <template>
   <div class="page-frame room-page" v-if="room">
-    <div class="room-topline"><button class="back-link" @click="leaveRoomAndExit"><i class="bi bi-arrow-left"></i> Sảnh game</button><div class="room-breadcrumb">{{ game.category === 'cards' ? 'Bàn bài' : game.category === 'board' ? 'Bàn cờ' : 'Social room' }} <span>/</span> {{ room.id.startsWith('demo-') ? 'Phòng mẫu' : 'Phòng riêng' }}</div><div class="room-top-actions"><span class="secure-label realtime-status" :class="realtimeStatus.toLowerCase()"><span class="status-signal"></span><i class="bi bi-wifi"></i> {{ realtimeLabel }}</span><button v-if="canDeleteRoom" class="icon-button danger-icon" title="Xóa phòng" @click="deleteCurrentRoom"><i class="bi bi-trash3"></i></button><button class="icon-button"><i class="bi bi-share"></i></button></div></div>
+    <div class="room-topline"><RouterLink class="back-link" to="/rooms">Sảnh game</RouterLink><div class="room-breadcrumb">{{ game.category === 'cards' ? 'Bàn bài' : game.category === 'board' ? 'Bàn cờ' : 'Social room' }} <span>/</span> {{ room.id.startsWith('demo-') ? 'Phòng mẫu' : 'Phòng riêng' }}</div><div class="room-top-actions"><span class="secure-label realtime-status" :class="realtimeStatus.toLowerCase()"><span class="status-signal"></span><i class="bi bi-wifi"></i> {{ realtimeLabel }}</span><button v-if="canDeleteRoom" class="icon-button danger-icon" title="Xóa phòng" @click="deleteCurrentRoom"><i class="bi bi-trash3"></i></button><button v-if="players.some((player: any) => player.id === authStore.profile?.id)" class="btn btn-quiet" @click="leaveRoomAndExit">Rời phòng</button><button class="icon-button" title="Sao chép liên kết phòng" aria-label="Sao chép liên kết phòng" @click="shareRoom"><i class="bi bi-share"></i></button></div></div>
     <div class="room-header mt-4"><div><div class="eyebrow"><span class="live-dot"></span> {{ room.status === 'RUNNING' ? 'Trận đấu đang diễn ra' : 'Phòng chờ · mở cửa' }}</div><h1 class="page-title mb-2">{{ room.name }}</h1><p>{{ game.description }}</p></div><div class="room-header-stats"><div><small>Phí vào bàn</small><strong>{{ room.entry_fee ? formatCoins(room.entry_fee) : 'Miễn phí' }}</strong></div><div><small>Thời lượng</small><strong>{{ game.duration }}</strong></div><div><small>Người xem</small><strong><i class="bi bi-eye me-1"></i>{{ spectators }}</strong></div></div></div>
 
     <div class="room-grid-layout mt-4">
@@ -161,12 +173,12 @@ const takeSeat = async () => {
           <div class="table-footer"><div class="table-footer-stat"><i class="bi bi-people-fill"></i><span><strong>{{ players.length }}/{{ room.max_players }}</strong><small>ghế đã chọn</small></span></div><div class="table-footer-stat"><i class="bi bi-eye"></i><span><strong>{{ spectators }}</strong><small>đang xem</small></span></div><div class="table-footer-note"><i class="bi bi-info-circle"></i> Khi bàn đầy, người mới vào sẽ tự động ở chế độ xem.</div></div>
         </section>
 
-        <section class="room-control-row mt-3"><div class="ready-state"><span class="ready-check"><i class="bi bi-check-lg"></i></span><div><strong>{{ isFull ? 'Bàn đã đủ người' : `${room.max_players - players.length} ghế đang mở` }}</strong><small>{{ room.status === 'RUNNING' ? (isFull ? 'Bàn đang kín ghế; người mới sẽ xem realtime.' : 'Trận đang diễn ra; ghế trống vẫn nhận người thật.') : isFull ? 'Bạn có thể theo dõi trực tiếp từ khu vực khán giả.' : 'Ghế được giữ theo thứ tự người chọn.' }}</small></div></div><div class="d-flex gap-2"><button v-if="canStartAi" @click="handleStartGame(true)" class="btn btn-outline-gold px-3" :disabled="isStarting"><i class="bi bi-cpu me-1"></i>Đấu máy</button><button v-if="currentUserIsOwner || room.id.startsWith('demo-')" @click="handleStartGame()" class="btn btn-gold px-4" :disabled="isStarting || (players.length < game.minPlayers)"><span v-if="isStarting" class="spinner-border spinner-border-sm me-2"></span><i v-else class="bi bi-play-fill me-1"></i>{{ players.length < game.minPlayers ? `Đợi đủ ${game.minPlayers} người` : 'Bắt đầu ván' }}</button><span v-else class="waiting-owner"><i class="bi bi-hourglass-split me-2"></i>Chờ chủ bàn bắt đầu</span></div></section>
+        <section class="room-control-row mt-3"><div class="ready-state"><span class="ready-check"><i class="bi bi-check-lg"></i></span><div><strong>{{ isFull ? 'Bàn đã đủ người' : `${room.max_players - players.length} ghế đang mở` }}</strong><small>{{ room.status === 'RUNNING' ? (isFull ? 'Bàn đang kín ghế; người mới sẽ xem realtime.' : 'Ghế trống có thể giữ cho ván tiếp theo.') : isFull ? 'Bạn có thể theo dõi trực tiếp từ khu vực khán giả.' : 'Ghế được giữ theo thứ tự người chọn.' }}</small></div></div><div class="d-flex gap-2"><select v-if="canStartAi" v-model="aiLevel" aria-label="Độ khó của máy" class="form-select"><option value="EASY">Dễ</option><option value="MEDIUM">Vừa</option><option value="HARD">Khó</option></select><button v-if="canStartAi" @click="handleStartGame(true)" class="btn btn-outline-gold px-3" :disabled="isStarting"><i class="bi bi-cpu me-1"></i>Đấu máy</button><button v-if="currentUserIsOwner || room.id.startsWith('demo-')" @click="handleStartGame()" class="btn btn-gold px-4" :disabled="isStarting || (!demoRoom && players.length < game.minPlayers)"><span v-if="isStarting" class="spinner-border spinner-border-sm me-2"></span><i v-else class="bi bi-play-fill me-1"></i>{{ demoRoom ? 'Chơi với máy' : players.length < game.minPlayers ? `Đợi đủ ${game.minPlayers} người` : 'Bắt đầu ván' }}</button><span v-else class="waiting-owner"><i class="bi bi-hourglass-split me-2"></i>Chờ chủ bàn bắt đầu</span></div></section>
 
         <section class="guide-panel glass-panel mt-3"><div class="guide-header"><div><div class="eyebrow">How to play</div><h2>Hướng dẫn {{ game.name }}</h2></div><span class="guide-tag"><i class="bi bi-book me-1"></i> Luật riêng của bàn</span></div><div class="guide-content"><div class="guide-tabs"><button v-for="(_, index) in game.howToPlay" :key="index" :class="{active: activeGuide === index}" @click="activeGuide = index"><span>0{{ index + 1 }}</span>{{ index === 0 ? 'Bắt đầu' : index === 1 ? 'Trong ván' : 'Kết thúc' }}</button></div><div class="guide-step"><span class="step-number">0{{ activeGuide + 1 }}</span><div><h3>{{ game.howToPlay[activeGuide] }}</h3><p>{{ game.rules[activeGuide] || game.rules[0] }}</p></div></div></div></section>
       </main>
 
-      <aside class="room-side"><ChatBox :channelId="`ROOM_${room.id}`" title="BÀN CHAT" /><section class="side-rules glass-panel"><div class="rules-heading"><div><div class="eyebrow">Table rules</div><h2>Luật & tiền</h2></div><i class="bi bi-receipt-cutoff text-gold"></i></div><div class="rule-list"><div><span>Phí vào bàn</span><strong>{{ room.entry_fee ? formatCoins(room.entry_fee) : '0 xu' }}</strong></div><div><span>Cơ chế bàn</span><strong>Luân phiên ghế</strong></div><div><span>Luật kết toán</span><strong>{{ game.fee }}</strong></div><div><span>Người mới</span><strong>{{ isFull ? 'Chỉ xem' : 'Có thể chọn ghế' }}</strong></div></div><div class="rule-callout"><i class="bi bi-shield-lock"></i><span>LuNu khóa hành động và kết quả theo từng ván để mọi giao dịch đều rõ ràng.</span></div></section></aside>
+      <aside class="room-side"><ChatBox :channelId="`ROOM_${room.id}`" title="BÀN CHAT" /><section class="side-rules glass-panel"><div class="rules-heading"><div><div class="eyebrow">Table rules</div><h2>Luật & tiền</h2></div><i class="bi bi-receipt-cutoff text-gold"></i></div><div class="rule-list"><div><span>Phí vào bàn</span><strong>{{ room.entry_fee ? formatCoins(room.entry_fee) : '0 xu' }}</strong></div><div><span>Cơ chế bàn</span><strong>Luân phiên ghế</strong></div><div><span>Luật kết toán</span><strong>{{ game.fee }}</strong></div><div><span>Người mới</span><strong>{{ isFull ? 'Chỉ xem' : 'Có thể chọn ghế' }}</strong></div></div><div class="rule-callout"><i class="bi bi-shield-lock"></i><span>Phí được giữ khi bắt đầu ván. Hủy ván sẽ hoàn phí vào ví.</span></div></section></aside>
     </div>
   </div>
 </template>
