@@ -10,10 +10,11 @@ if (!supabaseUrl || !supabaseServiceKey) {
   throw new Error('Missing Supabase environment variables in backend.');
 }
 
-// Admin client bypasses RLS for server-authoritative actions
-export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false
-  }
-});
+const serverAuth = { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false };
+
+export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, { auth: serverAuth });
+
+// Signing in sets the client's in-memory session even with persistence disabled.
+export function createSupabaseLoginClient() {
+  return createClient(supabaseUrl!, process.env.SUPABASE_ANON_KEY || supabaseServiceKey!, { auth: serverAuth });
+}

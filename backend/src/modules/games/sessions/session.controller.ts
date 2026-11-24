@@ -21,18 +21,26 @@ const requireActivePlayer = async (roomId: string, userId: string) => {
   return players;
 };
 
-const getSessionParticipants = async (roomId: string, state: any) => {
-  const { data: seats } = await supabaseAdmin.from('game_room_players').select('user_id, role, seat_index').eq('room_id', roomId);
-  const ids = (seats || []).map((seat: any) => seat.user_id).filter(Boolean);
-  const { data: profiles } = ids.length ? await supabaseAdmin.from('profiles').select('id, username, display_name, avatar_url').in('id', ids) : { data: [] as any[] };
-  const byId = new Map((profiles || []).map((profile: any) => [profile.id, profile]));
-  const statePlayers = (state.players || []).map((entry: any) => typeof entry === 'string' ? { id: entry, seat: undefined } : { id: entry.playerId, seat: entry.seat });
-  const participants = statePlayers.map(({ id, seat: stateSeat }: any, index: number) => {
-    const seat = (seats || []).find((item: any) => item.user_id === id);
+const profileIdPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+const playerIdOf = (player: any): string | undefined => typeof player === 'string' ? player : player?.playerId;
+
+const getSessionParticipants = async (state: any) => {
+  const roster: string[] = (state.players || []).map(playerIdOf).filter((id: unknown) => typeof id === 'string');
+  const ids = roster.filter((id) => profileIdPattern.test(id));
+  const { data: profiles } = ids.length ?
+    await supabaseAdmin.from('profiles').select('id, username, display_name, avatar_url').in('id', ids) : { data: [] };
+  const byId = new Map((profiles || []).map((profile) => [profile.id, profile]));
+  return roster.map((id, index) => {
     const profile = byId.get(id);
-    return profile ? { ...profile, role: seat?.role || 'PLAYER', seat_index: seat?.seat_index || stateSeat || index + 1 } : { id, username: id.toLowerCase().startsWith('ai_') ? id : 'player', display_name: id.toLowerCase().startsWith('ai_') ? `Máy · ${id.replace('AI_', '')}` : 'Người chơi', avatar_url: null, role: 'PLAYER', seat_index: index + 1, is_ai: id.toLowerCase().startsWith('ai_') };
+    const isAi = id.startsWith('AI_');
+    const member = profile ?? {
+      id,
+      username: isAi ? id : 'player',
+      display_name: isAi ? `Máy · ${id.slice(3)}` : 'Người chơi',
+      avatar_url: null,
+    };
+    return { ...member, role: 'PLAYER', seat_index: index + 1, is_ai: isAi };
   });
-  return participants;
 };
 
 const resolveEngine = (gameId: string) => {
@@ -40,7 +48,6 @@ const resolveEngine = (gameId: string) => {
   catch { throw new AppError(409, 'ENGINE_NOT_READY', `Engine cho game ${gameId} chưa sẵn sàng. Phòng vẫn có thể dùng để chờ và xem bàn.`); }
 };
 
-const playerIdOf = (player: any): string | undefined => typeof player === 'string' ? player : player?.playerId;
 const participates = (state: any, id: string) => state.players?.some((player: any) => playerIdOf(player) === id);
 const nextUpdatedAt = (updatedAt: string) => new Date(Math.max(Date.now(), Date.parse(updatedAt) + 1)).toISOString();
 
@@ -48,7 +55,7 @@ function outcomeColumns(engine: ReturnType<typeof resolveEngine>, state: any) {
   if (!engine.isFinished(state)) return { status: 'PLAYING', winner_id: null };
   const result = engine.calculateResult(state) as any;
   const winner = result.winner || result.winnerPlayerId;
-  const isProfileId = typeof winner === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(winner);
+  const isProfileId = typeof winner === 'string' && profileIdPattern.test(winner);
   return { status: 'FINISHED', winner_id: isProfileId ? winner : null };
 }
 
@@ -68,14 +75,15 @@ async function reconcileExpired(session: any) {
 }
 
 async function sessionView(session: any, userId: string) {
-  const players = await getActiveRoomPlayers(session.room_id);
-  const isPlayer = players.some((player: any) => player.user_id === userId) && participates(session.current_state, userId);
   const { current_state, id, room_id, game_id, status, started_at, updated_at } = session;
+  const wasSeated = participates(current_state, userId);
+  const isPlayer = Boolean(wasSeated && (status !== 'PLAYING' ||
+    (await getActiveRoomPlayers(room_id)).some((player) => player.user_id === userId)));
   const engine = resolveEngine(session.game_id);
   return {
     session: { id, room_id, game_id, status, started_at, updated_at },
     state: { ...engine.getPublicState(current_state, isPlayer ? userId : ''), revision: current_state.revision || 0 },
-    participants: await getSessionParticipants(session.room_id, current_state),
+    participants: await getSessionParticipants(current_state),
     isPlayer,
   };
 }

@@ -1,8 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
-import { PGlite } from '@electric-sql/pglite';
-import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
+import { createTestDatabase } from './test-database';
 
 const a = '00000000-0000-0000-0000-000000000001';
 const b = '00000000-0000-0000-0000-000000000002';
@@ -12,21 +11,8 @@ const match = '00000000-0000-0000-0000-000000000011';
 const second = '00000000-0000-0000-0000-000000000012';
 
 test('SQL migrations enforce seats, keep secrets private and settle or refund wallet fees once', async () => {
-  const db = new PGlite({ extensions: { pgcrypto } });
+  const db = await createTestDatabase();
   try {
-    await db.exec(`
-      create role authenticated;
-      create role anon;
-      create role service_role;
-      create schema auth;
-      create schema storage;
-      create table auth.users(id uuid primary key, email text, raw_user_meta_data jsonb, raw_app_meta_data jsonb);
-      create function auth.uid() returns uuid language sql as 'select null::uuid';
-      create table storage.buckets(id text primary key, name text, public bool, file_size_limit bigint, allowed_mime_types text[]);
-      create table storage.objects(bucket_id text, name text);
-      create function storage.foldername(text) returns text[] language sql as 'select string_to_array($1, ''/'')';
-      create publication supabase_realtime;
-    `);
     const bundle = await readFile('supabase/LuNuBoardGame_FULL_SCHEMA.sql', 'utf8');
     await db.exec(bundle);
     await db.exec(bundle);
@@ -84,6 +70,12 @@ test('SQL migrations enforce seats, keep secrets private and settle or refund wa
     await db.query('delete from public.game_rooms where id = $1', [room]);
     assert.equal(await balance(a), 10100);
     assert.equal(await balance(b), 9900);
+    const history = await db.query('select * from public.lunu_match_history($1, null, null, null, null, 10)', [a]);
+    assert.equal(history.rows.length, 3);
+    assert.equal(history.rows.filter((row) => row.outcome === 'ABANDONED').length, 2);
+    assert.equal(history.rows.find((row) => row.session_id === match)?.outcome, 'WIN');
+    assert.ok(history.rows.every((row) => row.can_view === false));
+    assert.equal((await db.query('select count(*)::integer as total from public.game_match_results where user_id = $1', [fan])).rows[0].total, 0);
   } finally {
     await db.close();
   }

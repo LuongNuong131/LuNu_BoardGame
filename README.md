@@ -28,6 +28,7 @@ LuNu có 15 trò trong sảnh luyện tập `/practice`. Sảnh này chạy các
 - [Game engine contract](#game-engine-contract)
 - [Cấu trúc repository](#cấu-trúc-repository)
 - [API chính](#api-chính)
+- [Lịch sử ván và xếp hạng](#lịch-sử-ván-và-xếp-hạng)
 - [Kiểm thử và release](#kiểm-thử-và-release)
 - [Troubleshooting](#troubleshooting)
 - [Roadmap](#roadmap)
@@ -44,6 +45,7 @@ LuNu có 15 trò trong sảnh luyện tập `/practice`. Sảnh này chạy các
 | **AI tùy chọn** | AI không thay thế người thật. Chỉ khi chủ phòng chọn đấu máy, backend mới tạo AI slot; người thật vào sau có thể tiếp quản ghế máy ở bàn cờ miễn phí. |
 | **Arena** | Hiển thị participant thật, quyền PLAYER/SPECTATOR, server action log, vòng chơi, pot/bet, community cards và trạng thái realtime. Spectator bị khóa ở cả UI lẫn backend. |
 | **Tài khoản** | Supabase Auth, khôi phục session khi reload, profile, username, display name, avatar và trang lịch sử wallet. |
+| **Thành tích** | Lịch sử riêng có lọc và phân trang, thống kê thật trên hồ sơ, bảng xếp hạng theo trò và thời gian. |
 | **Admin** | Dashboard quản lý user, role, wallet audit, xóa phòng và xóa user có safeguard; không cho self-delete hoặc xóa `SUPER_ADMIN`. |
 | **Thông báo** | Toast và confirm dialog nội bộ theo thiết kế LuNu; không dùng `alert()`, `confirm()` hay native browser notification. |
 
@@ -133,6 +135,7 @@ Tạo file `backend/.env`:
 PORT=3000
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-server-only-service-role-key
+SUPABASE_ANON_KEY=your-public-anon-key
 CORS_ORIGIN=http://localhost:5173
 ```
 
@@ -165,6 +168,7 @@ backend/supabase/migrations/202608220000_core_schema.sql
 backend/supabase/migrations/202608220001_room_seating.sql
 backend/supabase/migrations/202608220002_game_catalog.sql
 backend/supabase/migrations/202611230000_session_lifecycle.sql
+backend/supabase/migrations/202611240000_match_results.sql
 ```
 
 Bundle được thiết kế theo hướng idempotent cho việc cài đặt lại. Nó bao gồm bảng profile, wallet, game catalog, room, seating, chat, game session, RLS, Realtime publication, wallet RPC, Storage bucket `avatars`, Storage policies và unique index chống nhiều session `PLAYING` trong cùng một room.
@@ -176,7 +180,7 @@ cd backend
 cat supabase/migrations/*.sql > supabase/LuNuBoardGame_FULL_SCHEMA.sql
 ```
 
-Với database đã cài ba migration đầu, áp dụng `202611230000_session_lifecycle.sql` trước khi chạy backend mới. Với database mới, dùng toàn bộ bundle. Nếu tài khoản quản trị được tạo bằng mật khẩu mẫu của script cũ, hãy đổi mật khẩu đang dùng. Script mới đọc `LUNU_ADMIN_PASSWORD` từ môi trường.
+Nếu database đã có migration `202611230000_session_lifecycle.sql`, áp dụng `202611240000_match_results.sql` để bật lịch sử và xếp hạng. Với database mới, dùng toàn bộ bundle. Nếu tài khoản quản trị được tạo bằng mật khẩu mẫu của script cũ, hãy đổi mật khẩu đang dùng. Script mới đọc `LUNU_ADMIN_PASSWORD` từ môi trường.
 
 ## Chạy frontend và backend
 
@@ -219,7 +223,9 @@ Các route frontend chính:
 | `/rooms` | Lobby tất cả game. |
 | `/room/:id` | Room detail, seating, chat và hướng dẫn game. |
 | `/game/:sessionId` | Live arena của session. |
-| `/profile` | Profile và avatar lifecycle. |
+| `/profile` | Hồ sơ, ảnh đại diện và thống kê ván. |
+| `/match-history` | Lịch sử ván của tài khoản, lọc theo trò và kết quả. |
+| `/leaderboard` | Xếp hạng đấu người theo trò, 30 ngày gần đây hoặc mọi thời điểm. |
 | `/wallet-history` | Lịch sử giao dịch wallet. |
 | `/admin` | Admin dashboard, yêu cầu role phù hợp. |
 
@@ -347,10 +353,20 @@ Tất cả endpoint backend được mount dưới `/api`.
 | `GET` | `/sessions/room/:roomId/active` | Lấy active session và quyền viewer. |
 | `GET` | `/sessions/:sessionId` | Lấy public session state. |
 | `POST` | `/sessions/:sessionId/action` | Gửi action được engine kiểm tra. |
+| `GET` | `/results/me` | Lịch sử của tài khoản hiện tại. Hỗ trợ `game`, `outcome`, `before`, `limit`. |
+| `GET` | `/results/me/stats` | Tổng ván có kết quả, số thắng, hòa và thua. |
+| `GET` | `/results/leaderboard` | 50 thành viên dẫn đầu cùng hạng của tài khoản hiện tại. Hỗ trợ `game` và `period=30d\|all`. |
 | `POST` | `/wallet/admin/modify` | Admin điều chỉnh wallet có audit. |
 | `DELETE` | `/admin/users/:id` | Admin xóa user với safeguard. |
 
 Tên route thực tế có thể được đối chiếu trong `backend/src/modules/*/*.routes.ts` và controller tương ứng.
+
+## Lịch sử ván và xếp hạng
+
+- Một ván trực tuyến đã kết thúc lưu một dòng kết quả cho mỗi người có tên trong ván. Lịch sử giữ tên bàn sau khi xóa phòng. Các ván cũ còn dữ liệu phiên được nhập lại trong migration. Ván cũ thiếu kết quả được ghi là “Chưa rõ”.
+- Tỷ lệ thắng là số ván thắng chia cho tổng ván thắng, hòa và thua. Thống kê cá nhân tính cả bàn đấu máy trực tuyến và Blackjack đấu nhà cái.
+- Bảng xếp hạng tính ván đấu người của thành viên đang hoạt động. Thắng được 3 điểm, hòa 1, thua 0. Cùng điểm thì xét số ván thắng. Cùng cả hai tiêu chí thì đồng hạng.
+- Ván luyện tập trên trình duyệt hoạt động độc lập với tài khoản. Ván dừng, ván chưa rõ kết quả, ván đấu máy và Blackjack không cộng điểm xếp hạng.
 
 ## Kiểm thử và release
 
@@ -397,7 +413,6 @@ Kiểm tra Supabase Auth session ở browser, `VITE_SUPABASE_URL`, `VITE_SUPABAS
 
 - Kiểm tra nhiều tài khoản trên một dự án Supabase staging và đo tải Realtime.
 - Bổ sung các luật thi đấu chưa có trong phiên bản LuNu, gồm khiếu nại lặp thế ở cờ tướng, gửi bài ở Phỏm, các lựa chọn split/double ở Blackjack và vòng nhiều tay với nút cái luân phiên ở Poker.
-- Thêm lịch sử thành tích người chơi và bảng xếp hạng sau khi thống nhất tiêu chí chấm.
 - Xác minh giao diện theo trình duyệt và kích thước màn hình trước khi phát hành.
 
 ## Đóng góp

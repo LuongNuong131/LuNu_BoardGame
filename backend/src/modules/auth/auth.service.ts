@@ -1,4 +1,4 @@
-import { supabaseAdmin } from '../../infrastructure/supabase/client';
+import { createSupabaseLoginClient, supabaseAdmin } from '../../infrastructure/supabase/client';
 import { AppError } from '../../shared/errors/AppError';
 
 export class AuthService {
@@ -6,7 +6,7 @@ export class AuthService {
     // Trick: Supabase yêu cầu email, mình map username nội bộ thành định dạng email
     const internalEmail = `${username}@gameverse.local`;
 
-    const { data, error } = await supabaseAdmin.auth.signInWithPassword({
+    const { data, error } = await createSupabaseLoginClient().auth.signInWithPassword({
       email: internalEmail,
       password,
     });

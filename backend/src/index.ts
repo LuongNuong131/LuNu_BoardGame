@@ -10,6 +10,7 @@ import { walletRoutes } from './modules/wallet/wallet.routes';
 import { roomsRoutes } from './modules/rooms/rooms.routes';
 import { chatRoutes } from './modules/chat/chat.routes';
 import { sessionRoutes } from './modules/games/sessions/session.routes';
+import { resultsRoutes } from './modules/games/results/results.routes';
 import { initializeGames } from './modules/games/core/init-games';
 
 dotenv.config();
@@ -31,6 +32,7 @@ server.register(adminRoutes, { prefix: '/api/admin' });
 server.register(walletRoutes, { prefix: '/api/wallet' });
 server.register(roomsRoutes, { prefix: '/api/rooms' });
 server.register(chatRoutes, { prefix: '/api/chat' });
+server.register(resultsRoutes, { prefix: '/api/results' });
 server.register(sessionRoutes, { prefix: '/api/sessions' }); // Đăng ký API Game Session
 
 const start = async () => {

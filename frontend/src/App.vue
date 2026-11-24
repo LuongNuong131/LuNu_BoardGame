@@ -16,6 +16,17 @@ const displayName = computed(() => authStore.profile?.display_name || 'Khách qu
 const username = computed(() => authStore.profile?.username || 'guest');
 const avatar = computed(() => authStore.profile?.avatar_url || `https://api.dicebear.com/9.x/shapes/svg?seed=${username.value}&backgroundColor=193a31`);
 
+const pageNames: Record<string, string> = {
+  RoomsLobby: 'Sảnh game',
+  RoomDetail: 'Phòng chơi',
+  Profile: 'Hồ sơ cá nhân',
+  AdminDashboard: 'Quản trị hệ thống',
+  MatchHistory: 'Lịch sử ván',
+  Leaderboard: 'Bảng xếp hạng',
+  WalletHistory: 'Ví và giao dịch',
+};
+const pageLabel = computed(() => pageNames[String(route.name)] || 'Tổng quan');
+
 watch([isGuestRoute, () => authStore.isAuthenticated], ([standalone, signedIn]) => {
   if (!standalone && signedIn) void walletStore.fetchBalance();
 }, { immediate: true });
@@ -49,7 +60,9 @@ const logout = async () => {
           <router-link to="/wallet-history" class="sidebar-link" active-class="active"><i class="bi bi-wallet2"></i><span>Ví & giao dịch</span></router-link>
           <router-link v-if="authStore.profile?.role === 'SUPER_ADMIN' || authStore.profile?.role === 'ADMIN'" to="/admin" class="sidebar-link" active-class="active"><i class="bi bi-shield-lock"></i><span>Quản trị hệ thống</span><span class="admin-tag">ADMIN</span></router-link>
         </nav>
-        <nav class="sidebar-nav mt-4">
+        <nav class="sidebar-nav mt-4" aria-label="Thành tích và luyện tập">
+          <router-link to="/match-history" class="sidebar-link" active-class="active"><i class="bi bi-clock-history" aria-hidden="true"></i><span>Lịch sử ván</span></router-link>
+          <router-link to="/leaderboard" class="sidebar-link" active-class="active"><i class="bi bi-trophy" aria-hidden="true"></i><span>Bảng xếp hạng</span></router-link>
           <router-link to="/practice" class="sidebar-link"><i class="bi bi-mortarboard"></i><span>Sảnh luyện tập</span></router-link>
         </nav>
         <div class="sidebar-spacer"></div>
@@ -59,9 +72,10 @@ const logout = async () => {
       <main class="main-content">
         <header class="topbar">
           <div class="d-lg-none"><router-link to="/" class="brand-mark"><span class="brand-glyph"><i class="bi bi-diamond-half"></i></span><span><strong>LuNu</strong></span></router-link></div>
-          <div class="topbar-context d-none d-md-flex"><span class="context-dot"></span><span>LuNu Club</span><span class="context-divider">/</span><span>{{ route.name === 'RoomsLobby' ? 'Sảnh game' : route.name === 'RoomDetail' ? 'Phòng chơi' : route.name === 'Profile' ? 'Hồ sơ cá nhân' : route.name === 'AdminDashboard' ? 'Quản trị hệ thống' : 'Tổng quan' }}</span></div>
+          <div class="topbar-context d-none d-md-flex"><span class="context-dot"></span><span>LuNu Club</span><span class="context-divider">/</span><span>{{ pageLabel }}</span></div>
           <div class="topbar-actions ms-auto">
-
+            <router-link to="/match-history" class="mobile-results d-lg-none" aria-label="Lịch sử ván"><i class="bi bi-clock-history" aria-hidden="true"></i></router-link>
+            <router-link to="/leaderboard" class="mobile-results d-lg-none" aria-label="Bảng xếp hạng"><i class="bi bi-trophy" aria-hidden="true"></i></router-link>
             <div class="top-wallet"><i class="bi bi-coin"></i><strong>{{ walletStore.balance.toLocaleString('vi-VN') }}</strong><small>xu</small></div>
             <router-link to="/profile" class="profile-chip"><img :src="avatar" :alt="displayName"><div class="d-none d-sm-block"><strong>{{ displayName }}</strong><small>@{{ username }}</small></div><i class="bi bi-chevron-down text-muted small"></i></router-link>
           </div>
@@ -97,6 +111,8 @@ const logout = async () => {
 .topbar-context { color: var(--gv-text-muted); font-size: .76rem; font-weight: 600; }
 .context-dot { width:7px; height:7px; border-radius:50%; background:var(--gv-accent-success); box-shadow:0 0 0 4px rgba(98,213,163,.1); }
 .context-divider { color:#3f504b; margin: 0 8px; }
+.mobile-results { display:inline-grid; place-items:center; width:38px; height:38px; border:1px solid #ffffff24; border-radius:9px; color:var(--gv-primary-hover); }
+.mobile-results[aria-current="page"] { border-color:var(--gv-primary); background:#d6ad6220; }
 .topbar-actions { display:flex; align-items:center; gap: 14px; }
 .icon-button { position:relative; width:36px; height:36px; border:1px solid rgba(255,255,255,.08); border-radius:10px; color:var(--gv-text-muted); background:rgba(255,255,255,.03); }
 .icon-button:hover { color:var(--gv-primary); border-color:rgba(214,173,98,.35); }
@@ -110,5 +126,6 @@ const logout = async () => {
 .profile-chip strong, .profile-chip small { display:block; line-height:1.25; }
 .profile-chip strong { font-size:.74rem; }
 .profile-chip small { color:var(--gv-text-muted); font-size:.6rem; }
-@media (max-width: 991px) { .main-content { margin-left:0; } .topbar { padding: 0 16px; } }
+@media (max-width: 991px) { .main-content { margin-left:0; } .topbar { padding: 0 16px; } .topbar-actions { gap:9px; } }
+@media (max-width: 370px) { .top-wallet { padding:5px; } .profile-chip { padding-left:0; } .profile-chip > i { display:none; } }
 </style>

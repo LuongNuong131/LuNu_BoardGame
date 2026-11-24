@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 import { useWalletStore } from '@/stores/wallet.store';
 import { useRoomStore } from '@/stores/room.store';
+import MatchStatsPanel from '@/features/results/MatchStatsPanel.vue';
 import { DEMO_ROOMS, GAME_BY_ID, GAME_CATALOG } from '@/data/games';
 
 const router = useRouter();
@@ -14,7 +15,7 @@ const featuredGames = computed(() => GAME_CATALOG.filter((game) => game.featured
 const liveRooms = computed(() => roomStore.rooms.length ? roomStore.rooms.filter((room: any) => room.status === 'RUNNING').slice(0, 3) : import.meta.env.VITE_DEMO_MODE === 'true' ? DEMO_ROOMS.filter((room) => room.status === 'RUNNING') : []);
 const firstName = computed(() => (authStore.profile?.display_name || 'bạn').split(' ')[0]);
 
-onMounted(() => { walletStore.fetchBalance(); roomStore.fetchRooms().then(() => roomStore.subscribeToLobby()).catch(() => undefined); });
+onMounted(() => { roomStore.fetchRooms().then(() => roomStore.subscribeToLobby()).catch(() => undefined); });
 onUnmounted(() => roomStore.unsubscribeFromLobby());
 
 const enterRoom = (roomId: string) => router.push(`/room/${roomId}`);
@@ -62,6 +63,7 @@ const enterRoom = (roomId: string) => router.push(`/room/${roomId}`);
               <button @click="enterRoom(room.id)" class="btn btn-sm btn-quiet">Xem bàn</button>
             </div>
           </div>
+          <p v-if="!liveRooms.length" class="empty-rooms">Chưa có bàn nào đang diễn ra.</p>
         </section>
       </div>
 
@@ -69,17 +71,10 @@ const enterRoom = (roomId: string) => router.push(`/room/${roomId}`);
         <section class="balance-card glass-panel mb-4">
           <div class="d-flex align-items-start justify-content-between"><div><div class="eyebrow">Ví của bạn</div><div class="balance-caption">Số dư khả dụng</div></div><div class="wallet-mark"><i class="bi bi-wallet2"></i></div></div>
           <div class="balance-amount">{{ walletStore.balance.toLocaleString('vi-VN') }} <small>xu</small></div>
-          <div class="balance-line"><span>Phí bàn đã dùng tháng này</span><strong>1.240 xu</strong></div>
-          <div class="progress-track"><span style="width: 36%"></span></div>
-          <div class="d-flex gap-2 mt-3"><router-link to="/wallet-history" class="btn btn-sm btn-gold flex-grow-1">Quản lý ví</router-link><button class="btn btn-sm btn-quiet"><i class="bi bi-plus-lg"></i></button></div>
+          <router-link to="/wallet-history" class="btn btn-sm btn-gold w-100">Quản lý ví</router-link>
         </section>
 
-        <section class="club-status glass-panel">
-          <div class="d-flex align-items-center justify-content-between mb-3"><div><div class="eyebrow">Hồ sơ câu lạc bộ</div><h3 class="mini-title">Thành tích mùa này</h3></div><div class="rank-badge">#24</div></div>
-          <div class="profile-mini"><img :src="authStore.profile?.avatar_url || `https://api.dicebear.com/9.x/shapes/svg?seed=${authStore.profile?.username || 'lunu'}&backgroundColor=193a31`" alt="Avatar"><div><strong>{{ authStore.profile?.display_name || 'Người chơi LuNu' }}</strong><small>Hạng Bạch Kim · Lv {{ authStore.profile?.level || 12 }}</small></div><i class="bi bi-chevron-right ms-auto text-muted"></i></div>
-          <div class="club-stats"><div><strong>68%</strong><small>Tỷ lệ thắng</small></div><div><strong>42</strong><small>Ván đã chơi</small></div><div><strong>08</strong><small>Huy hiệu</small></div></div>
-          <div class="next-reward"><div class="d-flex justify-content-between small mb-2"><span>Tiến độ huy hiệu</span><strong class="text-gold">72%</strong></div><div class="progress-track"><span style="width: 72%"></span></div><small class="text-muted d-block mt-2">Thắng thêm 3 ván để mở khóa “Người đọc vị”.</small></div>
-        </section>
+        <MatchStatsPanel />
       </div>
     </div>
   </div>
@@ -115,7 +110,11 @@ const enterRoom = (roomId: string) => router.push(`/room/${roomId}`);
 .table-game-icon { width:34px; height:34px; display:grid; place-items:center; border-radius:10px; background:rgba(255,255,255,.05); font-size:.95rem; }
 .table-name { min-width:0; flex:1; }.table-name strong,.table-name small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.table-name strong { font-size:.75rem; }.table-name small { color:var(--gv-text-muted); font-size:.62rem; margin-top:3px; }
 .table-occupancy,.table-viewers { color:var(--gv-text-muted); font-size:.65rem; white-space:nowrap; }.table-viewers { color:var(--gv-text-dim); }
-.balance-card, .club-status { padding:22px; }.balance-caption { color:var(--gv-text-muted); font-size:.75rem; margin-top:7px; }.wallet-mark { color:var(--gv-primary); width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(214,173,98,.2);border-radius:11px;background:rgba(214,173,98,.08); }.balance-amount { margin:25px 0 18px; font-size:2rem; font-weight:800; letter-spacing:-.06em; }.balance-amount small { color:var(--gv-primary); font-size:.72rem; font-weight:700; letter-spacing:0; }.balance-line { display:flex; justify-content:space-between; color:var(--gv-text-muted); font-size:.63rem; }.balance-line strong { color:var(--gv-text-main); }.progress-track { height:5px; margin-top:8px; overflow:hidden; border-radius:10px; background:#223631; }.progress-track span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--gv-secondary),var(--gv-primary)); }
-.mini-title { font-size:1rem; font-weight:800; margin:6px 0 0; }.rank-badge { color:#17211d; background:var(--gv-primary); border-radius:10px; padding:7px 9px; font:500 .72rem 'DM Mono',monospace; }.profile-mini { display:flex; align-items:center; gap:10px; padding:13px 0; border-top:1px solid rgba(255,255,255,.07); border-bottom:1px solid rgba(255,255,255,.07); }.profile-mini img { width:37px;height:37px;border-radius:12px;background:#193a31;border:1px solid rgba(214,173,98,.25); }.profile-mini strong,.profile-mini small { display:block; }.profile-mini strong { font-size:.76rem; }.profile-mini small { color:var(--gv-text-muted);font-size:.62rem;margin-top:3px; }.club-stats { display:flex; justify-content:space-between; padding:18px 0; }.club-stats div { text-align:center; flex:1; border-right:1px solid rgba(255,255,255,.07); }.club-stats div:last-child { border:0; }.club-stats strong,.club-stats small { display:block; }.club-stats strong { font-size:1rem; }.club-stats small { color:var(--gv-text-muted);font-size:.59rem;margin-top:4px; }.next-reward { padding:14px; border-radius:13px; background:rgba(255,255,255,.03); }.next-reward .small { color:var(--gv-text-muted);font-size:.63rem; }
+.balance-card { padding:22px; }
+.balance-caption { color:var(--gv-text-muted); font-size:.9rem; margin-top:7px; }
+.wallet-mark { color:var(--gv-primary); width:34px; height:34px; display:grid; place-items:center; border:1px solid rgba(214,173,98,.2); border-radius:11px; background:rgba(214,173,98,.08); }
+.balance-amount { margin:25px 0 18px; font-size:2rem; font-weight:800; letter-spacing:-.06em; }
+.balance-amount small { color:var(--gv-primary); font-size:.83rem; font-weight:700; letter-spacing:0; }
+.empty-rooms { color:var(--gv-text-muted); margin:12px 0 0; }
 @media (max-width: 767px) { .hero-copy { padding:42px 26px; }.hero-copy p { font-size:.8rem; }.table-occupancy,.table-viewers { display:none; }.table-row { gap:9px; } }
 </style>

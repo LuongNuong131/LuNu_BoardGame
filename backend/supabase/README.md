@@ -4,7 +4,9 @@ LuNu uses Supabase Auth plus the public tables `profiles`, `wallets`, `wallet_tr
 
 Bạn có thể chạy nhanh bằng cách mở file `backend/supabase/LuNuBoardGame_FULL_SCHEMA.sql`, copy toàn bộ nội dung rồi paste vào Supabase Dashboard → SQL Editor → Run. Nếu dùng Supabase CLI, chạy `supabase db push` sau khi đặt các migration vào thư mục migrations.
 
-Nếu muốn chạy tách từng bước, thứ tự là `202608220000_core_schema.sql`, `202608220001_room_seating.sql`, rồi `202608220002_game_catalog.sql`. File `LuNuBoardGame_FULL_SCHEMA.sql` đã nối sẵn cả ba phần và được viết theo hướng idempotent để có thể chạy lại an toàn. Core migration tạo bảng còn thiếu, profile/wallet triggers, RPC `process_wallet_transaction`, RLS, Storage bucket `avatars`, các policy upload và Realtime publication. Seating migration thêm `PLAYER`/`SPECTATOR`, deterministic `seat_index`, join ordering, unique active-seat index và RPC atomic `join_room`. Catalog migration seed UNO cùng toàn bộ game LuNu.
+Thứ tự migration theo tên tệp trong `migrations/`. Với database đã chạy `202611230000_session_lifecycle.sql`, áp dụng `202611240000_match_results.sql` để bật lịch sử và xếp hạng.
+
+Migration mới lưu kết quả tối giản cho từng người khi ván kết thúc và nhập lại những ván còn dữ liệu phiên. Dòng kết quả còn lại sau khi xóa phòng và bị xóa khi xóa tài khoản tương ứng. Bảng kết quả và RPC đọc chỉ cấp quyền cho backend. Client gọi `/api/results` bằng token đăng nhập.
 
 ## Avatar Storage lifecycle
 
@@ -28,7 +30,7 @@ npm install
 npm run dev
 ```
 
-`@fastify/multipart` là dependency phục vụ upload avatar. Backend hiện load dependency này theo kiểu optional để login, room và game API vẫn khởi động được khi `node_modules` chưa đồng bộ; chỉ riêng endpoint avatar sẽ trả `503 MULTIPART_UNAVAILABLE` cho tới khi chạy `npm install`.
+`@fastify/multipart` phục vụ endpoint upload avatar. Backend có thể nhận thêm `SUPABASE_ANON_KEY` cho luồng đăng nhập. Nếu thiếu, backend dùng khóa đã cấu hình trên một client riêng cho lần đăng nhập.
 
 Các endpoint profile là `PATCH /api/auth/profile` và `POST /api/auth/profile/avatar` (multipart field `avatar`). Room owner/admin có thể gọi `DELETE /api/rooms/:id`. Admin có thể xóa user bằng `DELETE /api/admin/users/:id`; self-delete và xóa `SUPER_ADMIN` bị chặn.
 

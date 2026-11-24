@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const username = ref('');
 const password = ref('');
@@ -11,7 +12,16 @@ const password = ref('');
 const handleLogin = async () => {
   if (!username.value || !password.value) return;
   const success = await authStore.login(username.value, password.value);
-  if (success) router.push('/');
+  if (!success) return;
+  const redirect = route.query.redirect;
+  if (typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')) {
+    const destination = router.resolve(redirect);
+    if (destination.matched.length && destination.meta.requiresAuth) {
+      void router.replace(destination.fullPath);
+      return;
+    }
+  }
+  void router.replace('/');
 };
 </script>
 
